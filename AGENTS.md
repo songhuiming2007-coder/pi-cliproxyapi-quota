@@ -43,8 +43,15 @@ Add this directory's `index.ts` absolute path to the `extensions` array in
 
 ## Scope
 
-- Currently only Claude subscription windows (the user's subscription is Claude). Codex / Antigravity
-  use different usage endpoints and are not covered yet.
+- Provider registry in `index.ts` (`ADAPTERS`): one adapter per OAuth provider, each with its own
+  endpoint / headers / body and a parser that normalizes to `Win { label, remainingPct, resetIso }`.
+- **Verified** against live accounts: `claude`, `antigravity` / `gemini`.
+- **Unverified** (endpoints + parsers ported from the EasyCLIProxyAPI panel, not yet tested on a real
+  account, shown as `(unverified)` in output): `codex`, `kimi`, `xai` / `grok`. To verify one: run its
+  request through `POST /v0/management/api-call` with a real credential, compare the raw JSON to the
+  adapter's field names, adjust, then flip `verified: true`.
+- The management `api-call` request body uses fields `{ authIndex, method, url, header, body }` where
+  `body` is a **string** (sending `data` or an object body returns `invalid body`).
 
 ## Release
 

@@ -5,27 +5,32 @@
 
 **English** | [中文](#中文说明)
 
-A [pi](https://pi.dev) extension for users who route their Claude subscription into pi through
+A [pi](https://pi.dev) extension for users who route their AI subscriptions into pi through
 [CLIProxyAPI / EasyCLIProxyAPI](https://github.com/router-for-me/EasyCLIProxyAPI).
 
 It adds two things pi doesn't surface for reverse‑proxied models:
 
-1. **Quota** — see your Claude subscription **5‑hour** and **weekly** limits without leaving pi.
+1. **Quota** — see subscription limits for **every OAuth provider** the proxy holds without leaving pi.
 2. **Thinking level** — a `/think` command and a footer indicator for the active reasoning effort.
+
+Supported providers: **Claude** and **Antigravity / Gemini Code Assist** (verified), plus **Codex**,
+**Kimi**, and **xAI / Grok** (best‑effort, shown as `(unverified)` until confirmed against a real
+account — see [Scope](#scope--limitations)).
 
 ## Features
 
 | Trigger | What it does |
 |---|---|
-| `/quota` | Show 5h / weekly (and other) quota windows: used %, remaining %, reset countdown. |
+| `/quota` | For each credential the proxy holds, show every quota window: used %, remaining %, reset countdown. |
 | `Ctrl+Shift+Q` | Same as `/quota`, but works **while the model is streaming** (it's a shortcut, not a queued command). |
 | footer `Quota 5h 64% left · 7d 95% left` | Remaining %, matching the EasyCLIProxyAPI panel. Auto‑refreshed at the start/end of each turn (throttled to 60s). |
 | `/think [level]` | Show or set thinking level (`off/minimal/low/medium/high/xhigh/max`), clamped to the model. |
 | footer `🧠 high` | Always‑visible current thinking level (native `Shift+Tab` also cycles it). |
 
 The quota data path mirrors the EasyCLIProxyAPI control panel exactly: the proxy management API
-`POST /v0/management/api-call` proxies a `GET https://api.anthropic.com/api/oauth/usage` using your
-stored Claude OAuth credential. This endpoint reports utilization; it does not consume quota.
+`POST /v0/management/api-call` proxies each provider's own usage endpoint (e.g. Anthropic
+`/api/oauth/usage`, Google `retrieveUserQuotaSummary`) using the stored OAuth credential. These
+endpoints report utilization; they do not consume quota. Disabled credentials are skipped.
 
 ## Install
 
@@ -62,10 +67,12 @@ If you don’t run the GUI, set `CLIPROXYAPI_MANAGEMENT_KEY` (must match your pr
 
 ## Scope & limitations
 
-- v0.1 covers **Claude** subscription windows. Codex / Antigravity use different usage endpoints
-  and are not implemented yet — PRs welcome (see repo issues).
+- **Verified** (tested against live accounts): `claude`, `antigravity` / `gemini`.
+- **Unverified** (ported from the EasyCLIProxyAPI panel, endpoints + parsers wired but not yet tested
+  against a real account): `codex`, `kimi`, `xai` / `grok`. These are labelled `(unverified)` in the
+  output. If one is wrong for your account, please open an issue with the raw response — easy to fix.
 - Reads a local management key to call the localhost management API; nothing is sent anywhere except
-  your own proxy and Anthropic's usage endpoint (through that proxy).
+  your own proxy and each provider's usage endpoint (through that proxy). Disabled credentials are skipped.
 
 ## License
 
@@ -78,22 +85,25 @@ MIT
 适用于通过 [CLIProxyAPI / EasyCLIProxyAPI](https://github.com/router-for-me/EasyCLIProxyAPI)
 把 Claude 订阅接入 [pi](https://pi.dev) 的用户。它补上了 pi 对反向代理模型不暴露的两件事：
 
-1. **额度** — 在 pi 里直接看 Claude 订阅的 **5 小时**与**周**限额。
+1. **额度** — 在 pi 里直接看代理持有的**每个 OAuth 提供方**的订阅限额。
 2. **思考强度** — `/think` 命令 + footer 常驻显示当前推理档位。
+
+支持的提供方：**Claude**、**Antigravity / Gemini Code Assist**（已验证），以及 **Codex**、**Kimi**、
+**xAI / Grok**（尽力支持，在真实账号上校准前显示为 `(unverified)`）。
 
 ### 功能
 
 | 触发 | 作用 |
 |---|---|
-| `/quota` | 显示 5 小时 / 周（及其它）配额窗口：已用 %、剩余 %、重置倒计时。 |
+| `/quota` | 对代理持有的每个凭证，显示其所有配额窗口：已用 %、剩余 %、重置倒计时。 |
 | `Ctrl+Shift+Q` | 同 `/quota`，但**模型正在输出时也能按**（快捷键，不会被排队）。 |
 | footer `Quota 5h 64% left · 7d 95% left` | 显示剩余 %，与 EasyCLIProxyAPI 面板一致；每轮开始/结束自动刷新（60s 节流）。 |
 | `/think [level]` | 查看/设置思考强度（`off/minimal/low/medium/high/xhigh/max`，受模型能力限制）。 |
 | footer `🧠 high` | 常驻显示当前思考强度（原生 `Shift+Tab` 也能循环切换）。 |
 
 取数链路与 EasyCLIProxyAPI 控制面板完全一致：代理管理 API `POST /v0/management/api-call`
-用你存储的 Claude OAuth 凭证代理请求 `GET https://api.anthropic.com/api/oauth/usage`。
-该端点只报告用量，不消耗额度。
+用存储的 OAuth 凭证代理请求各提供方自己的用量端点（如 Anthropic `/api/oauth/usage`、
+Google `retrieveUserQuotaSummary`）。这些端点只报告用量，不消耗额度；禁用的凭证会跳过。
 
 ### 安装
 
@@ -129,8 +139,10 @@ pi install git:github.com/songhuiming2007-coder/pi-cliproxyapi-quota
 
 ### 范围与限制
 
-- v0.1 只覆盖 **Claude** 订阅窗口。Codex / Antigravity 用量端点不同，尚未实现 — 欢迎 PR。
-- 仅读取本地管理密钥去调本机管理 API；除了你自己的代理和（经代理的）Anthropic 用量端点，不向任何地方发送数据。
+- **已验证**（在真实账号上实测）：`claude`、`antigravity` / `gemini`。
+- **未验证**（按 EasyCLIProxyAPI 面板移植，端点与解析已接但未在真实账号上跑过）：`codex`、`kimi`、
+  `xai` / `grok`，输出里标 `(unverified)`。若某家在你账号上不对，请带原始返回开 issue，很容易修。
+- 仅读取本地管理密钥去调本机管理 API；除了你自己的代理和（经代理的）各提供方用量端点，不向任何地方发送数据；禁用的凭证会跳过。
 
 ### 许可证
 

@@ -1,7 +1,7 @@
 {
   "name": "pi-cliproxyapi-quota",
-  "version": "0.1.1",
-  "description": "Pi extension: view your Claude subscription 5-hour / weekly quota (via CLIProxyAPI) inside pi, plus a /think command and thinking-level footer.",
+  "version": "0.2.0",
+  "description": "Pi extension: view subscription quota for every OAuth provider CLIProxyAPI holds (Claude, Antigravity/Gemini, Codex, Kimi, xAI) inside pi, plus a /think command and thinking-level footer.",
   "type": "module",
   "keywords": [
     "pi-package",

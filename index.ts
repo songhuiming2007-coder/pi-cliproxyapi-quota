@@ -2,10 +2,10 @@
  * pi-cliproxy-quota
  *
  * Two commands for a CLIProxyAPI (EasyCLIProxyAPI) setup:
- *  - /quota: show the Claude subscription 5-hour + weekly quota,
- *    fetched exactly like the EasyCLIProxyAPI panel does: the proxy management
- *    API `POST /v0/management/api-call` proxies a GET to
- *    https://api.anthropic.com/api/oauth/usage using the stored Claude OAuth token.
+ *  - /quota: show subscription quota for every OAuth provider the proxy holds,
+ *    fetched exactly like the EasyCLIProxyAPI panel does via the proxy management
+ *    API `POST /v0/management/api-call`. Providers: claude + antigravity/gemini
+ *    (verified), codex + kimi + xai (best-effort, marked (unverified)).
  *  - /think [level]: show or set the thinking level for the current model, and
  *    keep a footer indicator of the active level (native Shift+Tab also works).
  *
@@ -119,62 +119,245 @@ async function mgmtApiCall(
 	return (await res.json()) as { status_code: number; body: string };
 }
 
-async function listClaudeCredentials(base: string, key: string): Promise<AuthFile[]> {
+// List every OAuth credential the proxy holds (any provider), enabled only.
+async function listCredentials(base: string, key: string): Promise<AuthFile[]> {
 	const data = await mgmtGet<{ files?: AuthFile[] }>(base, key, "auth-files");
 	return (data.files ?? []).filter(
-		(f) =>
-			(f.provider === "claude" || f.type === "claude") &&
-			!f.disabled &&
-			typeof f.auth_index === "string" &&
-			f.auth_index.length > 0,
+		(f) => typeof f.auth_index === "string" && f.auth_index.length > 0 && !f.disabled,
 	);
 }
 
-// Anthropic OAuth usage endpoint (proxy swaps $TOKEN$ for the real bearer).
-const ANTHROPIC_USAGE_URL = "https://api.anthropic.com/api/oauth/usage";
-const ANTHROPIC_USAGE_HEADERS = {
-	Authorization: "Bearer $TOKEN$",
-	"Content-Type": "application/json",
-	"anthropic-beta": "oauth-2025-04-20",
-};
-
-interface UsageWindow {
-	utilization: number | null;
-	resets_at: string | null;
-}
-interface UsageResponse {
-	[key: string]: UsageWindow | null | unknown;
+// Normalize provider name the same way the GUI does.
+function providerKey(f: AuthFile): string {
+	const raw = (f.provider ?? f.type ?? "").trim().toLowerCase().replace(/_/g, "-");
+	if (raw === "x-ai" || raw === "grok") return "xai";
+	return raw;
 }
 
-async function fetchClaudeUsage(
+// Normalized quota window (remaining-oriented; used = 100 - remaining).
+export interface Win {
+	label: string;
+	remainingPct: number | null;
+	resetIso: string | null;
+}
+
+function toNum(v: unknown): number | null {
+	const n = typeof v === "number" ? v : typeof v === "string" ? Number(v.trim()) : NaN;
+	return Number.isFinite(n) ? n : null;
+}
+
+function firstIso(...vals: unknown[]): string | null {
+	for (const v of vals) if (typeof v === "string" && v.trim()) return v;
+	return null;
+}
+
+// Run one upstream request through the management api-call proxy; returns raw body text.
+// The proxy substitutes $TOKEN$ in headers with the stored OAuth bearer for authIndex.
+async function proxyCall(
 	base: string,
 	key: string,
-	authIndex: string,
-): Promise<UsageResponse> {
-	const out = await mgmtApiCall(base, key, {
-		authIndex,
-		method: "GET",
-		url: ANTHROPIC_USAGE_URL,
-		header: ANTHROPIC_USAGE_HEADERS,
-	});
+	req: { authIndex: string; method: string; url: string; header?: Record<string, string>; body?: string },
+): Promise<string> {
+	const out = await mgmtApiCall(base, key, req);
 	if (out.status_code < 200 || out.status_code >= 300) {
-		throw new Error(`usage upstream HTTP ${out.status_code}`);
+		throw new Error(`upstream HTTP ${out.status_code}`);
 	}
-	return JSON.parse(out.body) as UsageResponse;
+	return out.body;
+}
+
+const BEARER = { Authorization: "Bearer $TOKEN$" };
+
+interface Adapter {
+	verified: boolean;
+	fetch: (base: string, key: string, authIndex: string) => Promise<Win[]>;
+}
+
+// ---- claude (VERIFIED): GET api.anthropic.com/api/oauth/usage ----
+const CLAUDE_WINDOWS: Array<[string, string]> = [
+	["five_hour", "5-hour (session)"],
+	["seven_day", "7-day (weekly)"],
+	["seven_day_oauth_apps", "7-day OAuth apps"],
+	["seven_day_opus", "7-day Opus"],
+	["seven_day_sonnet", "7-day Sonnet"],
+	["seven_day_cowork", "7-day Cowork"],
+	["iguana_necktie", "7-day Fable"],
+];
+const claudeAdapter: Adapter = {
+	verified: true,
+	async fetch(base, key, authIndex) {
+		const body = await proxyCall(base, key, {
+			authIndex,
+			method: "GET",
+			url: "https://api.anthropic.com/api/oauth/usage",
+			header: { ...BEARER, "Content-Type": "application/json", "anthropic-beta": "oauth-2025-04-20" },
+		});
+		const usage = JSON.parse(body) as Record<string, { utilization?: unknown; resets_at?: unknown } | null>;
+		const wins: Win[] = [];
+		for (const [k, label] of CLAUDE_WINDOWS) {
+			const w = usage[k];
+			if (!w || typeof w !== "object") continue;
+			const u = toNum((w as { utilization?: unknown }).utilization);
+			if (u === null) continue;
+			wins.push({ label, remainingPct: Math.max(0, 100 - u), resetIso: firstIso((w as { resets_at?: unknown }).resets_at) });
+		}
+		return wins;
+	},
+};
+
+// ---- antigravity / gemini code assist (VERIFIED): POST retrieveUserQuotaSummary ----
+const antigravityAdapter: Adapter = {
+	verified: true,
+	async fetch(base, key, authIndex) {
+		const ua = "antigravity/cli/1.0.13 (aidev_client; os_type=darwin; arch=arm64)";
+		const body = await proxyCall(base, key, {
+			authIndex,
+			method: "POST",
+			url: "https://cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary",
+			header: { ...BEARER, "Content-Type": "application/json", "User-Agent": ua },
+			body: JSON.stringify({ metadata: { ideType: "ANTIGRAVITY" } }),
+		});
+		const data = JSON.parse(body) as {
+			groups?: Array<{ displayName?: unknown; buckets?: Array<Record<string, unknown>> }>;
+		};
+		const wins: Win[] = [];
+		for (const g of data.groups ?? []) {
+			const gname = typeof g.displayName === "string" ? g.displayName : "Group";
+			for (const b of g.buckets ?? []) {
+				const frac = toNum(b.remainingFraction);
+				if (frac === null) continue;
+				const win = String(b.window ?? "").toLowerCase();
+				const tag = win === "5h" ? "5h" : win === "weekly" ? "weekly" : win || "quota";
+				wins.push({
+					label: `${gname} · ${tag}`,
+					remainingPct: Math.max(0, Math.min(100, frac * 100)),
+					resetIso: firstIso(b.resetTime),
+				});
+			}
+		}
+		return wins;
+	},
+};
+
+// ---- kimi (UNVERIFIED): GET api.kimi.com/coding/v1/usages ----
+const kimiAdapter: Adapter = {
+	verified: false,
+	async fetch(base, key, authIndex) {
+		const body = await proxyCall(base, key, {
+			authIndex, method: "GET", url: "https://api.kimi.com/coding/v1/usages", header: { ...BEARER },
+		});
+		const data = JSON.parse(body) as { limits?: Array<Record<string, unknown>> };
+		const wins: Win[] = [];
+		const limits = Array.isArray(data.limits) ? data.limits : [];
+		limits.forEach((l, i) => {
+			const limit = toNum(l.limit);
+			let used = toNum(l.used);
+			const remaining = toNum(l.remaining);
+			if (used === null && remaining !== null && limit !== null) used = limit - remaining;
+			if (limit === null || limit <= 0 || used === null) return;
+			const label =
+				(typeof l.name === "string" && l.name) || (typeof l.title === "string" && l.title) || `Limit ${i + 1}`;
+			wins.push({
+				label,
+				remainingPct: Math.max(0, 100 - (used / limit) * 100),
+				resetIso: firstIso(l.reset_at, l.resetAt, l.reset_time),
+			});
+		});
+		return wins;
+	},
+};
+
+// ---- codex (UNVERIFIED): GET chatgpt.com/backend-api/wham/usage ----
+const codexAdapter: Adapter = {
+	verified: false,
+	async fetch(base, key, authIndex) {
+		const body = await proxyCall(base, key, {
+			authIndex,
+			method: "GET",
+			url: "https://chatgpt.com/backend-api/wham/usage",
+			header: {
+				...BEARER,
+				"Content-Type": "application/json",
+				"User-Agent": "codex_cli_rs/0.76.0 (Debian 13.0.0; x86_64) WindowsTerminal",
+			},
+		});
+		const data = JSON.parse(body) as Record<string, unknown>;
+		const wins: Win[] = [];
+		const rl = (data.rate_limits ?? data) as Record<string, unknown>;
+		for (const slot of ["primary", "secondary"] as const) {
+			const r = rl[slot] as Record<string, unknown> | undefined;
+			const up = toNum(r?.used_percent ?? r?.usedPercent);
+			if (up === null) continue;
+			const secs = toNum(r?.resets_in_seconds ?? r?.resetsInSeconds);
+			const resetIso = secs !== null && secs > 0 ? new Date(Date.now() + secs * 1000).toISOString() : firstIso(r?.resets_at);
+			wins.push({ label: `rate ${slot}`, remainingPct: Math.max(0, 100 - up), resetIso });
+		}
+		const bp = toNum(
+			data.creditUsagePercent ?? data.credit_usage_percent ?? data.usagePercent ?? data.usage_percent,
+		);
+		if (bp !== null) {
+			const cp = (data.currentPeriod ?? data.current_period) as Record<string, unknown> | undefined;
+			wins.push({ label: "credits", remainingPct: Math.max(0, 100 - bp), resetIso: firstIso(cp?.end) });
+		}
+		return wins;
+	},
+};
+
+// ---- xai / grok (UNVERIFIED): GET api.x.ai/v1/me (mostly account health) ----
+const xaiAdapter: Adapter = {
+	verified: false,
+	async fetch(base, key, authIndex) {
+		const body = await proxyCall(base, key, {
+			authIndex, method: "GET", url: "https://api.x.ai/v1/me", header: { ...BEARER, accept: "application/json" },
+		});
+		const data = JSON.parse(body) as Record<string, unknown>;
+		const p = toNum(data.usagePercent ?? data.usage_percent ?? data.creditUsagePercent);
+		return p === null ? [] : [{ label: "usage", remainingPct: Math.max(0, 100 - p), resetIso: null }];
+	},
+};
+
+const ADAPTERS: Record<string, Adapter> = {
+	claude: claudeAdapter,
+	antigravity: antigravityAdapter,
+	gemini: antigravityAdapter,
+	kimi: kimiAdapter,
+	codex: codexAdapter,
+	xai: xaiAdapter,
+};
+
+/** Fetch and render quota for every known credential. Exported for test-quota.mjs. */
+export async function collectQuota(
+	base: string,
+	key: string,
+	now = Date.now(),
+): Promise<{ blocks: string[]; footer: string }> {
+	const creds = await listCredentials(base, key);
+	const known = creds
+		.filter((c) => ADAPTERS[providerKey(c)])
+		.sort((a, b) => (providerKey(a) === "claude" ? 0 : 1) - (providerKey(b) === "claude" ? 0 : 1));
+	if (known.length === 0) throw new Error("NO_CRED");
+	const blocks: string[] = [];
+	let footer = "";
+	for (const c of known) {
+		const pk = providerKey(c);
+		const adapter = ADAPTERS[pk];
+		const who = c.email || c.label || c.name;
+		const tag = adapter.verified ? "" : " (unverified)";
+		try {
+			const wins = await adapter.fetch(base, key, c.auth_index as string);
+			blocks.push(`● ${who} [${pk}]${tag}`);
+			blocks.push(...renderWindows(wins, now));
+			if (!footer) {
+				const s = summaryFromWins(wins);
+				if (s !== "Quota n/a") footer = s;
+			}
+		} catch (err) {
+			blocks.push(`● ${who} [${pk}]${tag}\n  failed: ${(err as Error).message}`);
+		}
+	}
+	return { blocks, footer };
 }
 
 // ---------- rendering ----------
-
-// Ordered list of known windows and their human labels (Chinese).
-const WINDOW_LABELS: Array<[string, string]> = [
-	["five_hour", "5-hour (session)"],
-	["seven_day", "7-day (weekly)"],
-	["seven_day_opus", "7-day Opus"],
-	["seven_day_sonnet", "7-day Sonnet"],
-	["seven_day_oauth_apps", "7-day OAuth apps"],
-	["seven_day_cowork", "7-day Cowork"],
-	["seven_day_fable", "7-day Fable"],
-];
 
 export function formatReset(iso: string | null, now = Date.now()): string {
 	if (!iso) return "—";
@@ -197,35 +380,31 @@ function bar(pct: number, width = 12): string {
 	return "█".repeat(filled) + "░".repeat(width - filled);
 }
 
-function isWindow(v: unknown): v is UsageWindow {
-	return !!v && typeof v === "object" && "utilization" in (v as object);
+/** Build display lines for one credential's normalized windows. */
+export function renderWindows(wins: Win[], now = Date.now()): string[] {
+	if (wins.length === 0) return ["  (no quota window data)"];
+	return wins.map((w) => {
+		const remain = w.remainingPct;
+		if (remain === null) return `  ${w.label.padEnd(22)} n/a · ${formatReset(w.resetIso, now)}`;
+		const used = Math.max(0, 100 - remain);
+		return `  ${w.label.padEnd(22)} ${bar(used)} ${used.toFixed(0)}% used · ${remain.toFixed(0)}% left · ${formatReset(w.resetIso, now)}`;
+	});
 }
 
-/** Build display lines for one credential's usage payload. */
-export function renderUsage(usage: UsageResponse, now = Date.now()): string[] {
-	const lines: string[] = [];
-	for (const [key, label] of WINDOW_LABELS) {
-		const w = usage[key];
-		if (!isWindow(w) || typeof w.utilization !== "number") continue;
-		const used = w.utilization;
-		const remain = Math.max(0, 100 - used);
-		lines.push(
-			`  ${label.padEnd(18)} ${bar(used)} ${used.toFixed(0)}% used · ${remain.toFixed(0)}% left · ${formatReset(w.resets_at, now)}`,
-		);
-	}
-	if (lines.length === 0) lines.push("  (no quota window data)");
-	return lines;
+function shortTag(label: string): string {
+	const l = label.toLowerCase();
+	if (l.includes("5h") || l.includes("5-hour") || l.includes("five")) return "5h";
+	if (l.includes("weekly") || l.includes("7-day") || l.includes("7d") || l.includes("week")) return "7d";
+	return label.split(/[ ·(]/)[0];
 }
 
-/** Compact one-line summary for the footer. */
-export function summaryLine(usage: UsageResponse): string {
+/** Compact one-line summary for the footer (first two windows). */
+export function summaryFromWins(wins: Win[]): string {
 	const parts: string[] = [];
-	const fh = usage.five_hour;
-	const wk = usage.seven_day;
-	if (isWindow(fh) && typeof fh.utilization === "number")
-		parts.push(`5h ${Math.max(0, 100 - fh.utilization).toFixed(0)}% left`);
-	if (isWindow(wk) && typeof wk.utilization === "number")
-		parts.push(`7d ${Math.max(0, 100 - wk.utilization).toFixed(0)}% left`);
+	for (const w of wins.slice(0, 2)) {
+		if (w.remainingPct === null) continue;
+		parts.push(`${shortTag(w.label)} ${w.remainingPct.toFixed(0)}% left`);
+	}
 	return parts.length ? `Quota ${parts.join(" · ")}` : "Quota n/a";
 }
 
@@ -300,22 +479,7 @@ export default function (pi: ExtensionAPI): void {
 		const base = resolveBaseUrl();
 		const key = resolveManagementKey();
 		if (!key) throw new Error("NO_KEY");
-		const creds = await listClaudeCredentials(base, key);
-		if (creds.length === 0) throw new Error("NO_CRED");
-		const blocks: string[] = [];
-		let footer = "";
-		for (const c of creds) {
-			const who = c.email || c.label || c.name;
-			try {
-				const usage = await fetchClaudeUsage(base, key, c.auth_index as string);
-				blocks.push(`● ${who}`);
-				blocks.push(...renderUsage(usage, now));
-				if (!footer) footer = summaryLine(usage);
-			} catch (err) {
-				blocks.push(`● ${who}\n  failed: ${(err as Error).message}`);
-			}
-		}
-		return { blocks, footer };
+		return collectQuota(base, key, now);
 	}
 
 	// silent=true only refreshes the footer (used for auto-refresh during/after a turn).
@@ -323,7 +487,7 @@ export default function (pi: ExtensionAPI): void {
 		if (!silent) ctx.ui.notify("Fetching quota…", "info");
 		try {
 			const { blocks, footer } = await collectUsage(Date.now());
-			if (!silent) ctx.ui.notify(`Claude subscription quota\n${blocks.join("\n")}`, "info");
+			if (!silent) ctx.ui.notify(`Subscription quota\n${blocks.join("\n")}`, "info");
 			if (footer && isPrimaryUiSession(ctx)) {
 				ctx.ui.setStatus(QUOTA_KEY, ctx.ui.theme.fg("dim", footer));
 			}
@@ -336,7 +500,10 @@ export default function (pi: ExtensionAPI): void {
 					"error",
 				);
 			} else if (msg === "NO_CRED") {
-				ctx.ui.notify("No usable Claude OAuth credential found.", "warning");
+				ctx.ui.notify(
+					"No usable OAuth credential found (claude / codex / antigravity / gemini / kimi / xai).",
+					"warning",
+				);
 			} else {
 				ctx.ui.notify(`Failed to fetch quota: ${msg}`, "error");
 			}
@@ -356,12 +523,12 @@ export default function (pi: ExtensionAPI): void {
 
 	// Works while streaming: shortcut fetches and shows quota immediately.
 	pi.registerShortcut("ctrl+shift+q", {
-		description: "Show Claude subscription quota (5h / weekly)",
+		description: "Show subscription quota (all OAuth providers)",
 		handler: (ctx) => runQuota(ctx),
 	});
 
 	pi.registerCommand("quota", {
-		description: "Show Claude subscription 5h / weekly quota (via CLIProxyAPI)",
+		description: "Show subscription quota for all OAuth providers (via CLIProxyAPI)",
 		handler: async (_args, ctx) => runQuota(ctx),
 	});
 }
