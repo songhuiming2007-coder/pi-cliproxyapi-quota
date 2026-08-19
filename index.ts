@@ -324,11 +324,23 @@ const ADAPTERS: Record<string, Adapter> = {
 	xai: xaiAdapter,
 };
 
+/** Guess which quota provider the current pi model routes to (by provider/id text). */
+export function providerFromModel(model: { provider?: string; id?: string } | undefined): string | null {
+	const s = `${model?.provider ?? ""} ${model?.id ?? ""}`.toLowerCase();
+	if (s.includes("claude")) return "claude";
+	if (s.includes("gemini") || s.includes("antigravity")) return "antigravity";
+	if (s.includes("codex") || s.includes("gpt")) return "codex";
+	if (s.includes("kimi")) return "kimi";
+	if (s.includes("grok") || s.includes("xai")) return "xai";
+	return null;
+}
+
 /** Fetch and render quota for every known credential. Exported for test-quota.mjs. */
 export async function collectQuota(
 	base: string,
 	key: string,
 	now = Date.now(),
+	prefer?: string | null,
 ): Promise<{ blocks: string[]; footer: string }> {
 	const creds = await listCredentials(base, key);
 	const known = creds
@@ -336,7 +348,7 @@ export async function collectQuota(
 		.sort((a, b) => (providerKey(a) === "claude" ? 0 : 1) - (providerKey(b) === "claude" ? 0 : 1));
 	if (known.length === 0) throw new Error("NO_CRED");
 	const blocks: string[] = [];
-	let footer = "";
+	const summaries = new Map<string, string>(); // providerKey -> one-line summary
 	for (const c of known) {
 		const pk = providerKey(c);
 		const adapter = ADAPTERS[pk];
@@ -346,14 +358,19 @@ export async function collectQuota(
 			const wins = await adapter.fetch(base, key, c.auth_index as string);
 			blocks.push(`● ${who} [${pk}]${tag}`);
 			blocks.push(...renderWindows(wins, now));
-			if (!footer) {
-				const s = summaryFromWins(wins);
-				if (s !== "Quota n/a") footer = s;
-			}
+			const s = summaryFromWins(wins);
+			if (s !== "Quota n/a" && !summaries.has(pk)) summaries.set(pk, s);
 		} catch (err) {
 			blocks.push(`● ${who} [${pk}]${tag}\n  failed: ${(err as Error).message}`);
 		}
 	}
+	// Footer follows the current model's provider; fall back to the first available.
+	const hit = (prefer && summaries.get(prefer)) ?? summaries.values().next().value;
+	const footer = hit
+		? summaries.size > 1
+			? hit.replace("Quota ", `Quota[${prefer && summaries.has(prefer) ? prefer : [...summaries.keys()][0]}] `)
+			: hit
+		: "";
 	return { blocks, footer };
 }
 
@@ -431,7 +448,12 @@ export default function (pi: ExtensionAPI): void {
 		ctx.ui.setStatus(THINK_KEY, ctx.ui.theme.fg("dim", `🧠 ${level}`));
 	}
 	pi.on("thinking_level_select", (_e, ctx) => refreshThinkStatus(ctx));
-	pi.on("model_select", (_e, ctx) => refreshThinkStatus(ctx));
+	// Switching models switches the footer to that provider's quota immediately.
+	pi.on("model_select", (_e, ctx) => {
+		refreshThinkStatus(ctx);
+		lastFooterFetch = 0;
+		refreshFooterThrottled(ctx);
+	});
 	pi.on("before_agent_start", (_e, ctx) => refreshThinkStatus(ctx));
 
 	// ----- /think -----
@@ -475,18 +497,18 @@ export default function (pi: ExtensionAPI): void {
 	const QUOTA_KEY = "cliproxy-quota";
 	let lastFooterFetch = 0;
 
-	async function collectUsage(now: number): Promise<{ blocks: string[]; footer: string }> {
+	async function collectUsage(now: number, prefer?: string | null): Promise<{ blocks: string[]; footer: string }> {
 		const base = resolveBaseUrl();
 		const key = resolveManagementKey();
 		if (!key) throw new Error("NO_KEY");
-		return collectQuota(base, key, now);
+		return collectQuota(base, key, now, prefer);
 	}
 
 	// silent=true only refreshes the footer (used for auto-refresh during/after a turn).
 	async function runQuota(ctx: ExtensionContext, silent = false): Promise<void> {
 		if (!silent) ctx.ui.notify("Fetching quota…", "info");
 		try {
-			const { blocks, footer } = await collectUsage(Date.now());
+			const { blocks, footer } = await collectUsage(Date.now(), providerFromModel(ctx.model));
 			if (!silent) ctx.ui.notify(`Subscription quota\n${blocks.join("\n")}`, "info");
 			if (footer && isPrimaryUiSession(ctx)) {
 				ctx.ui.setStatus(QUOTA_KEY, ctx.ui.theme.fg("dim", footer));

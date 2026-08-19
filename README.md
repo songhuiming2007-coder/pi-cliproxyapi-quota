@@ -23,7 +23,7 @@ account — see [Scope](#scope--limitations)).
 |---|---|
 | `/quota` | For each credential the proxy holds, show every quota window: used %, remaining %, reset countdown. |
 | `Ctrl+Shift+Q` | Same as `/quota`, but works **while the model is streaming** (it's a shortcut, not a queued command). |
-| footer `Quota 5h 64% left · 7d 95% left` | Remaining %, matching the EasyCLIProxyAPI panel. Auto‑refreshed at the start/end of each turn (throttled to 60s). |
+| footer `Quota[claude] 5h 64% left · 7d 95% left` | Remaining % for the provider of the **current model** (follows model switches; falls back to the first credential). Auto‑refreshed at the start/end of each turn (throttled to 60s). |
 | `/think [level]` | Show or set thinking level (`off/minimal/low/medium/high/xhigh/max`), clamped to the model. |
 | footer `🧠 high` | Always‑visible current thinking level (native `Shift+Tab` also cycles it). |
 
@@ -97,7 +97,7 @@ MIT
 |---|---|
 | `/quota` | 对代理持有的每个凭证，显示其所有配额窗口：已用 %、剩余 %、重置倒计时。 |
 | `Ctrl+Shift+Q` | 同 `/quota`，但**模型正在输出时也能按**（快捷键，不会被排队）。 |
-| footer `Quota 5h 64% left · 7d 95% left` | 显示剩余 %，与 EasyCLIProxyAPI 面板一致；每轮开始/结束自动刷新（60s 节流）。 |
+| footer `Quota[claude] 5h 64% left · 7d 95% left` | 显示**当前模型**对应服务的剩余 %（随模型切换，取不到时回退到第一个凭证）；每轮开始/结束自动刷新（60s 节流）。 |
 | `/think [level]` | 查看/设置思考强度（`off/minimal/low/medium/high/xhigh/max`，受模型能力限制）。 |
 | footer `🧠 high` | 常驻显示当前思考强度（原生 `Shift+Tab` 也能循环切换）。 |
 
