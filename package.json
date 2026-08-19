@@ -1,0 +1,40 @@
+{
+  "name": "pi-cliproxyapi-quota",
+  "version": "0.1.0",
+  "description": "Pi extension: view your Claude subscription 5-hour / weekly quota (via CLIProxyAPI) inside pi, plus a /think command and thinking-level footer.",
+  "type": "module",
+  "keywords": [
+    "pi-package",
+    "pi-extension",
+    "cliproxyapi",
+    "claude",
+    "quota"
+  ],
+  "license": "MIT",
+  "author": "songguiming",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/songhuiming2007-coder/pi-cliproxyapi-quota.git"
+  },
+  "homepage": "https://github.com/songhuiming2007-coder/pi-cliproxyapi-quota#readme",
+  "bugs": {
+    "url": "https://github.com/songhuiming2007-coder/pi-cliproxyapi-quota/issues"
+  },
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "pi": {
+    "extensions": [
+      "./index.ts"
+    ]
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-ai": "*",
+    "@earendil-works/pi-coding-agent": "*"
+  },
+  "files": [
+    "index.ts",
+    "README.md",
+    "LICENSE"
+  ]
+}
