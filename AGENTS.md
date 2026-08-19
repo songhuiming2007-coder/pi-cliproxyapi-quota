@@ -1,35 +1,53 @@
-# pi-cliproxy-quota
+# pi-cliproxyapi-quota
 
-pi 扩展。解决两件事：
+A pi extension that solves two things for setups routing a Claude subscription into pi through
+CLIProxyAPI / EasyCLIProxyAPI:
 
-1. `/quota`（别名 `/额度`）：在 pi 里直接查看 CLIProxyAPI 背后 Claude 订阅的 **5 小时额度**与**周额度**（以及其它可用配额窗口）。数据链路与 EasyCLIProxyAPI 客户端一致：调用代理管理 API `POST /v0/management/api-call`，让代理用你的 Claude OAuth 凭证代理请求 `https://api.anthropic.com/api/oauth/usage`。
-   - **`Ctrl+Shift+Q`** 快捷键：模型正在跑的时候也能按，直接弹额度（快捷键走 TUI 事件循环，不受排队影响）。
-   - footer 自动刷新：会话首轮开始 + 每轮结束时静默拉取一次（60s 节流），常驻显示 `额度 5h xx% · 周 xx%`，工作中随时可瞟。
-2. `/think [档位]`：显式查看/设置当前模型的思考强度（pi 原生也可用 `Shift+Tab` 循环）。并在 footer 常驻显示当前思考档位。
+1. `/quota`: view the Claude subscription **5-hour** and **weekly** quota (and other windows) from
+   inside pi. Same data path as the EasyCLIProxyAPI panel: call the proxy management API
+   `POST /v0/management/api-call`, which proxies a `GET https://api.anthropic.com/api/oauth/usage`
+   using the stored Claude OAuth credential.
+2. `/think [level]`: show/set the current model's thinking level (native `Shift+Tab` also cycles it),
+   plus a persistent footer indicator of the active level.
 
-## 目录约定
+## Layout conventions
 
-- `index.ts` —— 扩展主体（唯一源文件，pi 直接以 TS 加载）。
-- 不引入任何运行时第三方依赖；只用 Node 内置模块 + 全局 `fetch`。
-- 对 `@earendil-works/*` 只做 `import type`（编译期擦除，运行时不解析），避免脱离 node_modules 时解析失败。
+- `index.ts` — the whole extension (single source file, loaded as TS by pi).
+- No third-party runtime dependencies; only Node built-ins + global `fetch`.
+- `@earendil-works/*` are `import type` only (erased at build time, never resolved at runtime),
+  so the file also works outside `node_modules`.
 
-## 凭据纪律（重要）
+## Credential discipline (important)
 
-- 管理密钥（`management-secret-key`）**绝不写入本仓库任何文件**。运行时按以下顺序解析：
-  1. 环境变量 `CLIPROXYAPI_MANAGEMENT_KEY`
-  2. `~/.pi/agent/cliproxyapi-quota.json` 的 `managementKey` 字段（可选覆盖）
-  3. EasyCLIProxyAPI GUI 的 `~/Library/Application Support/com.cpa.gui/config.toml` 里的 `management-secret-key`（默认来源）
-- base URL 解析：环境变量 `CLIPROXYAPI_BASE_URL` → `~/.pi/agent/cliproxyapi.json` 的 `baseUrl` → `http://127.0.0.1:8317`。
+- The management key (`management-secret-key`) is **never written to any file in this repo**. It is
+  resolved at runtime in this order:
+  1. env `CLIPROXYAPI_MANAGEMENT_KEY`
+  2. `~/.pi/agent/cliproxyapi-quota.json` field `managementKey` (optional override)
+  3. EasyCLIProxyAPI GUI `config.toml` `management-secret-key` (default source), located per-OS:
+     macOS `~/Library/Application Support/com.cpa.gui/config.toml`,
+     Linux `$XDG_CONFIG_HOME/com.cpa.gui/config.toml`,
+     Windows `%APPDATA%\com.cpa.gui\config.toml`.
+- Base URL resolution: env `CLIPROXYAPI_BASE_URL` → `~/.pi/agent/cliproxyapi.json` `baseUrl` →
+  `http://127.0.0.1:8317`.
 
-## 挂载方式
+## Loading during development
 
-在 `~/.pi/agent/settings.json` 的 `extensions` 数组加入本目录的 `index.ts` 绝对路径，重启 pi（或 `/reload`）。
+Add this directory's `index.ts` absolute path to the `extensions` array in
+`~/.pi/agent/settings.json`, then restart pi (or `/reload`).
 
-## 验证
+## Verification
 
-- `node --experimental-strip-types test-quota.mjs`（或直接用 `curl` 打管理 API）确认取数逻辑；
-- pi 内 `/quota` 有额度输出、`/think high` 能改档位即为通过。
+- `node test-quota.mjs` hits the live proxy and prints the rendered quota (also unit-checks the pure
+  formatters). Or just `curl` the management API directly.
+- Inside pi: `/quota` shows quota output and `/think high` changes the level — that's a pass.
 
-## 范围
+## Scope
 
-- 当前只实现 Claude 订阅的配额窗口（用户订阅即 Claude）。Codex/Antigravity 的配额端点不同，暂不覆盖，需要再加。
+- Currently only Claude subscription windows (the user's subscription is Claude). Codex / Antigravity
+  use different usage endpoints and are not covered yet.
+
+## Release
+
+- npm (public, appears in the pi.dev/packages gallery via the `pi-package` keyword) and GitHub git.
+- Bump version, push with tags, then `npm publish --otp=<code>` (2FA required):
+  `npm version patch && git push --follow-tags && npm publish --otp=<code>`.
