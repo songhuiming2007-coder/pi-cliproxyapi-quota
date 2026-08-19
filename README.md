@@ -1,5 +1,8 @@
 # pi-cliproxyapi-quota
 
+[![npm version](https://img.shields.io/npm/v/pi-cliproxyapi-quota.svg)](https://www.npmjs.com/package/pi-cliproxyapi-quota)
+[![license](https://img.shields.io/npm/l/pi-cliproxyapi-quota.svg)](./LICENSE)
+
 A [pi](https://pi.dev) extension for users who route their Claude subscription into pi through
 [CLIProxyAPI / EasyCLIProxyAPI](https://github.com/router-for-me/EasyCLIProxyAPI).
 
