@@ -2,7 +2,7 @@
  * pi-cliproxy-quota
  *
  * Two commands for a CLIProxyAPI (EasyCLIProxyAPI) setup:
- *  - /quota (alias /额度): show the Claude subscription 5-hour + weekly quota,
+ *  - /quota: show the Claude subscription 5-hour + weekly quota,
  *    fetched exactly like the EasyCLIProxyAPI panel does: the proxy management
  *    API `POST /v0/management/api-call` proxies a GET to
  *    https://api.anthropic.com/api/oauth/usage using the stored Claude OAuth token.
@@ -167,13 +167,13 @@ async function fetchClaudeUsage(
 
 // Ordered list of known windows and their human labels (Chinese).
 const WINDOW_LABELS: Array<[string, string]> = [
-	["five_hour", "5 小时 (会话)"],
-	["seven_day", "7 天 (周)"],
-	["seven_day_opus", "7 天 Opus"],
-	["seven_day_sonnet", "7 天 Sonnet"],
-	["seven_day_oauth_apps", "7 天 OAuth 应用"],
-	["seven_day_cowork", "7 天 Cowork"],
-	["seven_day_fable", "7 天 Fable"],
+	["five_hour", "5-hour (session)"],
+	["seven_day", "7-day (weekly)"],
+	["seven_day_opus", "7-day Opus"],
+	["seven_day_sonnet", "7-day Sonnet"],
+	["seven_day_oauth_apps", "7-day OAuth apps"],
+	["seven_day_cowork", "7-day Cowork"],
+	["seven_day_fable", "7-day Fable"],
 ];
 
 export function formatReset(iso: string | null, now = Date.now()): string {
@@ -181,15 +181,15 @@ export function formatReset(iso: string | null, now = Date.now()): string {
 	const t = Date.parse(iso);
 	if (Number.isNaN(t)) return "—";
 	let ms = t - now;
-	if (ms <= 0) return "可刷新";
+	if (ms <= 0) return "resets now";
 	const days = Math.floor(ms / 86_400_000);
 	ms -= days * 86_400_000;
 	const hours = Math.floor(ms / 3_600_000);
 	ms -= hours * 3_600_000;
 	const minutes = Math.floor(ms / 60_000);
-	if (days > 0) return `${days}天${hours}小时后`;
-	if (hours > 0) return `${hours}小时${minutes}分后`;
-	return `${minutes}分后`;
+	if (days > 0) return `resets in ${days}d ${hours}h`;
+	if (hours > 0) return `resets in ${hours}h ${minutes}m`;
+	return `resets in ${minutes}m`;
 }
 
 function bar(pct: number, width = 12): string {
@@ -210,10 +210,10 @@ export function renderUsage(usage: UsageResponse, now = Date.now()): string[] {
 		const used = w.utilization;
 		const remain = Math.max(0, 100 - used);
 		lines.push(
-			`  ${label.padEnd(14)} ${bar(used)} 已用 ${used.toFixed(0)}% · 余 ${remain.toFixed(0)}% · ${formatReset(w.resets_at, now)}`,
+			`  ${label.padEnd(18)} ${bar(used)} ${used.toFixed(0)}% used · ${remain.toFixed(0)}% left · ${formatReset(w.resets_at, now)}`,
 		);
 	}
-	if (lines.length === 0) lines.push("  (无可用配额窗口数据)");
+	if (lines.length === 0) lines.push("  (no quota window data)");
 	return lines;
 }
 
@@ -223,10 +223,10 @@ export function summaryLine(usage: UsageResponse): string {
 	const fh = usage.five_hour;
 	const wk = usage.seven_day;
 	if (isWindow(fh) && typeof fh.utilization === "number")
-		parts.push(`5h 剩${Math.max(0, 100 - fh.utilization).toFixed(0)}%`);
+		parts.push(`5h ${Math.max(0, 100 - fh.utilization).toFixed(0)}% left`);
 	if (isWindow(wk) && typeof wk.utilization === "number")
-		parts.push(`周 剩${Math.max(0, 100 - wk.utilization).toFixed(0)}%`);
-	return parts.length ? `额度 ${parts.join(" · ")}` : "额度 n/a";
+		parts.push(`7d ${Math.max(0, 100 - wk.utilization).toFixed(0)}% left`);
+	return parts.length ? `Quota ${parts.join(" · ")}` : "Quota n/a";
 }
 
 // ---------- extension ----------
@@ -257,7 +257,7 @@ export default function (pi: ExtensionAPI): void {
 
 	// ----- /think -----
 	pi.registerCommand("think", {
-		description: "查看或设置当前模型的思考强度 (off/minimal/low/medium/high/xhigh/max)",
+		description: "Show or set the thinking level (off/minimal/low/medium/high/xhigh/max) for the current model",
 		getArgumentCompletions: (prefix: string) => {
 			const items = THINK_ORDER.map((l) => ({ value: l, label: l }));
 			const f = items.filter((i) => i.value.startsWith(prefix.trim().toLowerCase()));
@@ -268,27 +268,27 @@ export default function (pi: ExtensionAPI): void {
 			const supported = supportedLevels(ctx);
 			if (!arg) {
 				const cur = pi.getThinkingLevel();
-				const list = supported.length ? supported.join(" / ") : "(当前模型不支持思考)";
+				const list = supported.length ? supported.join(" / ") : "(this model has no thinking levels)";
 				ctx.ui.notify(
-					`当前思考强度: ${cur}\n本模型可选: ${list}\n用法: /think high   (也可按 Shift+Tab 循环)`,
+					`Thinking level: ${cur}\nSupported by this model: ${list}\nUsage: /think high   (or press Shift+Tab to cycle)`,
 					"info",
 				);
 				return;
 			}
 			if (!THINK_ORDER.includes(arg as ModelThinkingLevel)) {
-				ctx.ui.notify(`未知档位 "${arg}"。可选: ${THINK_ORDER.join(" / ")}`, "error");
+				ctx.ui.notify(`Unknown level "${arg}". Options: ${THINK_ORDER.join(" / ")}`, "error");
 				return;
 			}
 			if (arg !== "off" && supported.length && !supported.includes(arg as ModelThinkingLevel)) {
 				ctx.ui.notify(
-					`本模型不支持 "${arg}"。可选: ${supported.join(" / ")}`,
+					`This model doesn't support "${arg}". Options: ${supported.join(" / ")}`,
 					"warning",
 				);
 				return;
 			}
 			pi.setThinkingLevel(arg === "off" ? ("off" as ThinkingLevel) : (arg as ThinkingLevel));
 			refreshThinkStatus(ctx);
-			ctx.ui.notify(`思考强度已设为: ${pi.getThinkingLevel()}`, "info");
+			ctx.ui.notify(`Thinking level set to: ${pi.getThinkingLevel()}`, "info");
 		},
 	});
 
@@ -312,18 +312,18 @@ export default function (pi: ExtensionAPI): void {
 				blocks.push(...renderUsage(usage, now));
 				if (!footer) footer = summaryLine(usage);
 			} catch (err) {
-				blocks.push(`● ${who}\n  获取失败: ${(err as Error).message}`);
+				blocks.push(`● ${who}\n  failed: ${(err as Error).message}`);
 			}
 		}
 		return { blocks, footer };
 	}
 
-	// silent=true 只更新 footer，不弹 toast（供运行中/结束时自动刷新）。
+	// silent=true only refreshes the footer (used for auto-refresh during/after a turn).
 	async function runQuota(ctx: ExtensionContext, silent = false): Promise<void> {
-		if (!silent) ctx.ui.notify("正在获取额度…", "info");
+		if (!silent) ctx.ui.notify("Fetching quota…", "info");
 		try {
 			const { blocks, footer } = await collectUsage(Date.now());
-			if (!silent) ctx.ui.notify(`Claude 订阅额度\n${blocks.join("\n")}`, "info");
+			if (!silent) ctx.ui.notify(`Claude subscription quota\n${blocks.join("\n")}`, "info");
 			if (footer && isPrimaryUiSession(ctx)) {
 				ctx.ui.setStatus(QUOTA_KEY, ctx.ui.theme.fg("dim", footer));
 			}
@@ -332,18 +332,18 @@ export default function (pi: ExtensionAPI): void {
 			const msg = (err as Error).message;
 			if (msg === "NO_KEY") {
 				ctx.ui.notify(
-					"未找到管理密钥。请设置 CLIPROXYAPI_MANAGEMENT_KEY，或在 ~/.pi/agent/cliproxyapi-quota.json 写入 {\"managementKey\":\"...\"}，或确保 EasyCLIProxyAPI GUI 已配置 management-secret-key。",
+					'Management key not found. Set CLIPROXYAPI_MANAGEMENT_KEY, or write {"managementKey":"..."} to ~/.pi/agent/cliproxyapi-quota.json, or make sure the EasyCLIProxyAPI GUI has a management-secret-key configured.',
 					"error",
 				);
 			} else if (msg === "NO_CRED") {
-				ctx.ui.notify("未找到可用的 Claude OAuth 凭证。", "warning");
+				ctx.ui.notify("No usable Claude OAuth credential found.", "warning");
 			} else {
-				ctx.ui.notify(`获取额度失败: ${msg}`, "error");
+				ctx.ui.notify(`Failed to fetch quota: ${msg}`, "error");
 			}
 		}
 	}
 
-	// 自动刷新 footer：会话首轮开始 + 每轮结束，60s 节流，静默。
+	// Auto-refresh footer: first turn start + each turn end, throttled to 60s, silent.
 	function refreshFooterThrottled(ctx: ExtensionContext): void {
 		if (!isPrimaryUiSession(ctx)) return;
 		const now = Date.now();
@@ -354,18 +354,14 @@ export default function (pi: ExtensionAPI): void {
 	pi.on("before_agent_start", (_e, ctx) => refreshFooterThrottled(ctx));
 	pi.on("agent_settled", (_e, ctx) => refreshFooterThrottled(ctx));
 
-	// 运行中也能按：快捷键即时拉取并弹出额度。
+	// Works while streaming: shortcut fetches and shows quota immediately.
 	pi.registerShortcut("ctrl+shift+q", {
-		description: "查看 Claude 订阅额度 (5 小时 / 周)",
+		description: "Show Claude subscription quota (5h / weekly)",
 		handler: (ctx) => runQuota(ctx),
 	});
 
 	pi.registerCommand("quota", {
-		description: "查看 Claude 订阅的 5 小时 / 周额度 (经 CLIProxyAPI)",
-		handler: async (_args, ctx) => runQuota(ctx),
-	});
-	pi.registerCommand("额度", {
-		description: "查看 Claude 订阅的 5 小时 / 周额度 (经 CLIProxyAPI)",
+		description: "Show Claude subscription 5h / weekly quota (via CLIProxyAPI)",
 		handler: async (_args, ctx) => runQuota(ctx),
 	});
 }

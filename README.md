@@ -12,9 +12,9 @@ It adds two things pi doesn't surface for reverse‑proxied models:
 
 | Trigger | What it does |
 |---|---|
-| `/quota` (alias `/额度`) | Show 5h / weekly (and other) quota windows: used %, remaining %, reset countdown. |
+| `/quota` | Show 5h / weekly (and other) quota windows: used %, remaining %, reset countdown. |
 | `Ctrl+Shift+Q` | Same as `/quota`, but works **while the model is streaming** (it's a shortcut, not a queued command). |
-| footer `额度 5h 剩64% · 周 剩95%` | Remaining %, matching the EasyCLIProxyAPI panel. Auto‑refreshed at the start/end of each turn (throttled to 60s). |
+| footer `Quota 5h 64% left · 7d 95% left` | Remaining %, matching the EasyCLIProxyAPI panel. Auto‑refreshed at the start/end of each turn (throttled to 60s). |
 | `/think [level]` | Show or set thinking level (`off/minimal/low/medium/high/xhigh/max`), clamped to the model. |
 | footer `🧠 high` | Always‑visible current thinking level (native `Shift+Tab` also cycles it). |
 
