@@ -23,6 +23,10 @@
   "engines": {
     "node": ">=22.19.0"
   },
+  "publishConfig": {
+    "registry": "https://registry.npmjs.org",
+    "access": "public"
+  },
   "pi": {
     "extensions": [
       "./index.ts"
