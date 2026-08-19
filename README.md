@@ -83,7 +83,7 @@ MIT
 ## 中文说明
 
 适用于通过 [CLIProxyAPI / EasyCLIProxyAPI](https://github.com/router-for-me/EasyCLIProxyAPI)
-把 Claude 订阅接入 [pi](https://pi.dev) 的用户。它补上了 pi 对反向代理模型不暴露的两件事：
+把各 AI 订阅接入 [pi](https://pi.dev) 的用户。它补上了 pi 对反向代理模型不暴露的两件事：
 
 1. **额度** — 在 pi 里直接看代理持有的**每个 OAuth 提供方**的订阅限额。
 2. **思考强度** — `/think` 命令 + footer 常驻显示当前推理档位。
