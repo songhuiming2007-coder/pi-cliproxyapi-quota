@@ -13,9 +13,9 @@ const wins = [
 	{ label: "5-hour (session)", remainingPct: 64, resetIso: "2026-08-19T11:50:00Z" },
 	{ label: "7-day (weekly)", remainingPct: 95, resetIso: "2026-08-25T03:00:00Z" },
 ];
-console.assert(summaryFromWins(wins) === "Quota 5h 64% left · 7d 95% left", "footer");
+console.assert(summaryFromWins(wins, now) === "Quota 5h 64% left ↻2h50m · 7d 95% left ↻5d18h", "footer");
 console.assert(renderWindows(wins, now)[0].includes("36% used · 64% left"), "render used/left");
-console.log("units OK:", summaryFromWins(wins));
+console.log("units OK:", summaryFromWins(wins, now));
 
 const base = resolveBaseUrl();
 const key = resolveManagementKey();

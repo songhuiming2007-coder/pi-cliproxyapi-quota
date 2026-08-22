@@ -415,12 +415,26 @@ function shortTag(label: string): string {
 	return label.split(/[ ·(]/)[0];
 }
 
+/** Compact relative reset for the footer: " ↻1h44m", " ↻2d21h" ("" when unknown). */
+function compactReset(iso: string | null, now: number): string {
+	if (!iso) return "";
+	const t = Date.parse(iso);
+	if (Number.isNaN(t) || t <= now) return "";
+	const ms = t - now;
+	const d = Math.floor(ms / 86_400_000);
+	const h = Math.floor((ms % 86_400_000) / 3_600_000);
+	const m = Math.floor((ms % 3_600_000) / 60_000);
+	if (d > 0) return ` ↻${d}d${h}h`;
+	if (h > 0) return ` ↻${h}h${m}m`;
+	return ` ↻${m}m`;
+}
+
 /** Compact one-line summary for the footer (first two windows). */
-export function summaryFromWins(wins: Win[]): string {
+export function summaryFromWins(wins: Win[], now = Date.now()): string {
 	const parts: string[] = [];
 	for (const w of wins.slice(0, 2)) {
 		if (w.remainingPct === null) continue;
-		parts.push(`${shortTag(w.label)} ${w.remainingPct.toFixed(0)}% left`);
+		parts.push(`${shortTag(w.label)} ${w.remainingPct.toFixed(0)}% left${compactReset(w.resetIso, now)}`);
 	}
 	return parts.length ? `Quota ${parts.join(" · ")}` : "Quota n/a";
 }
