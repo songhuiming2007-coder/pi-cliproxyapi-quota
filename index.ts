@@ -238,30 +238,36 @@ const antigravityAdapter: Adapter = {
 	},
 };
 
-// ---- kimi (UNVERIFIED): GET api.kimi.com/coding/v1/usages ----
+// ---- kimi (VERIFIED): GET api.kimi.com/coding/v1/usages ----
+// Real shape: top-level `usage` = weekly quota; `limits[].detail` = per-window quota
+// with `limits[].window.{duration,timeUnit}` (e.g. 300 minutes = the 5h window).
 const kimiAdapter: Adapter = {
-	verified: false,
+	verified: true,
 	async fetch(base, key, authIndex) {
 		const body = await proxyCall(base, key, {
 			authIndex, method: "GET", url: "https://api.kimi.com/coding/v1/usages", header: { ...BEARER },
 		});
-		const data = JSON.parse(body) as { limits?: Array<Record<string, unknown>> };
+		const data = JSON.parse(body) as {
+			usage?: Record<string, unknown>;
+			limits?: Array<{ window?: { duration?: unknown; timeUnit?: unknown }; detail?: Record<string, unknown> }>;
+		};
 		const wins: Win[] = [];
-		const limits = Array.isArray(data.limits) ? data.limits : [];
-		limits.forEach((l, i) => {
-			const limit = toNum(l.limit);
-			let used = toNum(l.used);
-			const remaining = toNum(l.remaining);
-			if (used === null && remaining !== null && limit !== null) used = limit - remaining;
-			if (limit === null || limit <= 0 || used === null) return;
-			const label =
-				(typeof l.name === "string" && l.name) || (typeof l.title === "string" && l.title) || `Limit ${i + 1}`;
+		const push = (label: string, d: Record<string, unknown> | undefined): void => {
+			const remaining = toNum(d?.remaining);
+			const limit = toNum(d?.limit);
+			if (remaining === null || limit === null || limit <= 0) return;
 			wins.push({
 				label,
-				remainingPct: Math.max(0, 100 - (used / limit) * 100),
-				resetIso: firstIso(l.reset_at, l.resetAt, l.reset_time),
+				remainingPct: Math.max(0, Math.min(100, (remaining / limit) * 100)),
+				resetIso: firstIso(d?.resetTime, d?.reset_at, d?.resetAt, d?.reset_time),
 			});
-		});
+		};
+		push("weekly", data.usage);
+		for (const l of data.limits ?? []) {
+			const mins = String(l.window?.timeUnit ?? "").includes("MINUTE") ? toNum(l.window?.duration) : null;
+			const label = mins === null ? "window" : mins % 60 === 0 ? `${mins / 60}h` : `${mins}m`;
+			push(label, l.detail);
+		}
 		return wins;
 	},
 };
@@ -365,12 +371,16 @@ export async function collectQuota(
 		}
 	}
 	// Footer follows the current model's provider; fall back to the first available.
-	const hit = (prefer && summaries.get(prefer)) ?? summaries.values().next().value;
-	const footer = hit
-		? summaries.size > 1
-			? hit.replace("Quota ", `Quota[${prefer && summaries.has(prefer) ? prefer : [...summaries.keys()][0]}] `)
-			: hit
-		: "";
+	// Tag the provider whenever it is not the current model's (or when several exist),
+	// so a fallback never masquerades as the active provider's quota.
+	const actual = prefer && summaries.has(prefer) ? prefer : [...summaries.keys()][0];
+	const hit = actual !== undefined ? summaries.get(actual) : undefined;
+	const footer =
+		hit && actual
+			? summaries.size > 1 || actual !== prefer
+				? hit.replace("Quota ", `Quota[${actual}] `)
+				: hit
+			: "";
 	return { blocks, footer };
 }
 
