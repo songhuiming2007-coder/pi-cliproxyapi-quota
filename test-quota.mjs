@@ -15,6 +15,18 @@ const wins = [
 ];
 console.assert(summaryFromWins(wins, now) === "Quota 5h 64% left ↻2h50m · 7d 95% left ↻5d18h", "footer");
 console.assert(renderWindows(wins, now)[0].includes("36% used · 64% left"), "render used/left");
+
+// 100% remaining should NOT display a countdown (avoids sliding resetTime illusion like ↻4h59m)
+const fullWins = [
+	{ label: "5-hour (session)", remainingPct: 100, resetIso: "2026-08-19T14:00:00Z" },
+];
+console.assert(summaryFromWins(fullWins, now) === "Quota 5h 100% left", "footer full quota");
+console.assert(renderWindows(fullWins, now)[0].includes("100% left · —"), "render full reset");
+// rounding hole: 99.96% displays as 100% and must also hide the (sliding) countdown
+const nearFull = [
+	{ label: "5-hour (session)", remainingPct: 99.96, resetIso: "2026-08-19T14:00:00Z" },
+];
+console.assert(summaryFromWins(nearFull, now) === "Quota 5h 100% left", "footer near-full quota");
 console.log("units OK:", summaryFromWins(wins, now));
 
 const base = resolveBaseUrl();

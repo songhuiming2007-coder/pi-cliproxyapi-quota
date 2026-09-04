@@ -93,6 +93,7 @@ interface AuthFile {
 	disabled?: boolean;
 	email?: string;
 	label?: string;
+	project_id?: string;
 }
 
 async function mgmtGet<T>(base: string, key: string, path: string): Promise<T> {
@@ -169,7 +170,7 @@ const BEARER = { Authorization: "Bearer $TOKEN$" };
 
 interface Adapter {
 	verified: boolean;
-	fetch: (base: string, key: string, authIndex: string) => Promise<Win[]>;
+	fetch: (base: string, key: string, cred: AuthFile) => Promise<Win[]>;
 }
 
 // ---- claude (VERIFIED): GET api.anthropic.com/api/oauth/usage ----
@@ -184,7 +185,8 @@ const CLAUDE_WINDOWS: Array<[string, string]> = [
 ];
 const claudeAdapter: Adapter = {
 	verified: true,
-	async fetch(base, key, authIndex) {
+	async fetch(base, key, cred) {
+		const authIndex = cred.auth_index as string;
 		const body = await proxyCall(base, key, {
 			authIndex,
 			method: "GET",
@@ -205,36 +207,85 @@ const claudeAdapter: Adapter = {
 };
 
 // ---- antigravity / gemini code assist (VERIFIED): POST retrieveUserQuotaSummary ----
+// Mirror the CPA panel: body is {project} (NOT {metadata}), tried across hosts in
+// order daily -> daily-sandbox -> prod. The same account reports DIFFERENT quota
+// per host environment (e.g. 88% weekly on daily vs 57% on prod); Antigravity
+// traffic is served by the daily host, so it is authoritative.
+const ANTIGRAVITY_HOSTS = [
+	"https://daily-cloudcode-pa.googleapis.com",
+	"https://daily-cloudcode-pa.sandbox.googleapis.com",
+	"https://cloudcode-pa.googleapis.com",
+];
+const ANTIGRAVITY_UA = "antigravity/cli/1.0.13 (aidev_client; os_type=darwin; arch=arm64)";
+
+function parseQuotaSummary(body: string): Win[] {
+	const data = JSON.parse(body) as {
+		groups?: Array<{ displayName?: unknown; buckets?: Array<Record<string, unknown>> }>;
+	};
+	const wins: Win[] = [];
+	for (const g of data.groups ?? []) {
+		const gname = typeof g.displayName === "string" ? g.displayName : "Group";
+		for (const b of g.buckets ?? []) {
+			const frac = toNum(b.remainingFraction);
+			if (frac === null) continue;
+			const win = String(b.window ?? "").toLowerCase();
+			const tag = win === "5h" ? "5h" : win === "weekly" ? "weekly" : win || "quota";
+			wins.push({
+				label: `${gname} · ${tag}`,
+				remainingPct: Math.max(0, Math.min(100, frac * 100)),
+				resetIso: firstIso(b.resetTime),
+			});
+		}
+	}
+	return wins;
+}
+
 const antigravityAdapter: Adapter = {
 	verified: true,
-	async fetch(base, key, authIndex) {
-		const ua = "antigravity/cli/1.0.13 (aidev_client; os_type=darwin; arch=arm64)";
+	async fetch(base, key, cred) {
+		const authIndex = cred.auth_index as string;
+		const header = { ...BEARER, "Content-Type": "application/json", "User-Agent": ANTIGRAVITY_UA };
+		// project id comes from the auth-files listing; discover via loadCodeAssist if absent
+		let project = cred.project_id;
+		if (!project) {
+			try {
+				const body = await proxyCall(base, key, {
+					authIndex, method: "POST",
+					url: `${ANTIGRAVITY_HOSTS[0]}/v1internal:loadCodeAssist`,
+					header, body: JSON.stringify({ metadata: { ideType: "ANTIGRAVITY" } }),
+				});
+				const d = JSON.parse(body) as { cloudaicompanionProject?: unknown };
+				const cp = d.cloudaicompanionProject;
+				project = typeof cp === "string" ? cp : (cp as { id?: string } | undefined)?.id;
+			} catch {
+				// fall through to the legacy metadata call below
+			}
+		}
+		if (project) {
+			let lastErr: unknown;
+			for (const host of ANTIGRAVITY_HOSTS) {
+				try {
+					const body = await proxyCall(base, key, {
+						authIndex, method: "POST",
+						url: `${host}/v1internal:retrieveUserQuotaSummary`,
+						header, body: JSON.stringify({ project }),
+					});
+					return parseQuotaSummary(body);
+				} catch (err) {
+					lastErr = err;
+				}
+			}
+			throw lastErr;
+		}
+		// no project id (e.g. plain gemini-cli credential): legacy prod-host call
 		const body = await proxyCall(base, key, {
 			authIndex,
 			method: "POST",
 			url: "https://cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary",
-			header: { ...BEARER, "Content-Type": "application/json", "User-Agent": ua },
+			header,
 			body: JSON.stringify({ metadata: { ideType: "ANTIGRAVITY" } }),
 		});
-		const data = JSON.parse(body) as {
-			groups?: Array<{ displayName?: unknown; buckets?: Array<Record<string, unknown>> }>;
-		};
-		const wins: Win[] = [];
-		for (const g of data.groups ?? []) {
-			const gname = typeof g.displayName === "string" ? g.displayName : "Group";
-			for (const b of g.buckets ?? []) {
-				const frac = toNum(b.remainingFraction);
-				if (frac === null) continue;
-				const win = String(b.window ?? "").toLowerCase();
-				const tag = win === "5h" ? "5h" : win === "weekly" ? "weekly" : win || "quota";
-				wins.push({
-					label: `${gname} · ${tag}`,
-					remainingPct: Math.max(0, Math.min(100, frac * 100)),
-					resetIso: firstIso(b.resetTime),
-				});
-			}
-		}
-		return wins;
+		return parseQuotaSummary(body);
 	},
 };
 
@@ -243,7 +294,8 @@ const antigravityAdapter: Adapter = {
 // with `limits[].window.{duration,timeUnit}` (e.g. 300 minutes = the 5h window).
 const kimiAdapter: Adapter = {
 	verified: true,
-	async fetch(base, key, authIndex) {
+	async fetch(base, key, cred) {
+		const authIndex = cred.auth_index as string;
 		const body = await proxyCall(base, key, {
 			authIndex, method: "GET", url: "https://api.kimi.com/coding/v1/usages", header: { ...BEARER },
 		});
@@ -275,7 +327,8 @@ const kimiAdapter: Adapter = {
 // ---- codex (UNVERIFIED): GET chatgpt.com/backend-api/wham/usage ----
 const codexAdapter: Adapter = {
 	verified: false,
-	async fetch(base, key, authIndex) {
+	async fetch(base, key, cred) {
+		const authIndex = cred.auth_index as string;
 		const body = await proxyCall(base, key, {
 			authIndex,
 			method: "GET",
@@ -311,7 +364,8 @@ const codexAdapter: Adapter = {
 // ---- xai / grok (UNVERIFIED): GET api.x.ai/v1/me (mostly account health) ----
 const xaiAdapter: Adapter = {
 	verified: false,
-	async fetch(base, key, authIndex) {
+	async fetch(base, key, cred) {
+		const authIndex = cred.auth_index as string;
 		const body = await proxyCall(base, key, {
 			authIndex, method: "GET", url: "https://api.x.ai/v1/me", header: { ...BEARER, accept: "application/json" },
 		});
@@ -361,7 +415,7 @@ export async function collectQuota(
 		const who = c.email || c.label || c.name;
 		const tag = adapter.verified ? "" : " (unverified)";
 		try {
-			const wins = await adapter.fetch(base, key, c.auth_index as string);
+			const wins = await adapter.fetch(base, key, c);
 			blocks.push(`● ${who} [${pk}]${tag}`);
 			blocks.push(...renderWindows(wins, now));
 			const s = summaryFromWins(wins);
@@ -375,11 +429,15 @@ export async function collectQuota(
 	// so a fallback never masquerades as the active provider's quota.
 	const actual = prefer && summaries.has(prefer) ? prefer : [...summaries.keys()][0];
 	const hit = actual !== undefined ? summaries.get(actual) : undefined;
+	// Stamp the fetch time so a stale/frozen footer is visibly distinguishable
+	// from live data that simply hasn't moved.
+	const d = new Date(now);
+	const stamp = `@${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
 	const footer =
 		hit && actual
-			? summaries.size > 1 || actual !== prefer
+			? (summaries.size > 1 || actual !== prefer
 				? hit.replace("Quota ", `Quota[${actual}] `)
-				: hit
+				: hit) + ` ${stamp}`
 			: "";
 	return { blocks, footer };
 }
@@ -414,7 +472,10 @@ export function renderWindows(wins: Win[], now = Date.now()): string[] {
 		const remain = w.remainingPct;
 		if (remain === null) return `  ${w.label.padEnd(22)} n/a · ${formatReset(w.resetIso, now)}`;
 		const used = Math.max(0, 100 - remain);
-		return `  ${w.label.padEnd(22)} ${bar(used)} ${used.toFixed(0)}% used · ${remain.toFixed(0)}% left · ${formatReset(w.resetIso, now)}`;
+		// suppress when the displayed value rounds to 100%: upstream slides resetTime
+		// on untouched buckets (always now+window), so a countdown there is an illusion.
+		const resetStr = Math.round(remain) >= 100 ? "—" : formatReset(w.resetIso, now);
+		return `  ${w.label.padEnd(22)} ${bar(used)} ${used.toFixed(0)}% used · ${remain.toFixed(0)}% left · ${resetStr}`;
 	});
 }
 
@@ -444,7 +505,9 @@ export function summaryFromWins(wins: Win[], now = Date.now()): string {
 	const parts: string[] = [];
 	for (const w of wins.slice(0, 2)) {
 		if (w.remainingPct === null) continue;
-		parts.push(`${shortTag(w.label)} ${w.remainingPct.toFixed(0)}% left${compactReset(w.resetIso, now)}`);
+		const rounded = Math.round(w.remainingPct);
+		const reset = rounded >= 100 ? "" : compactReset(w.resetIso, now);
+		parts.push(`${shortTag(w.label)} ${rounded}% left${reset}`);
 	}
 	return parts.length ? `Quota ${parts.join(" · ")}` : "Quota n/a";
 }
