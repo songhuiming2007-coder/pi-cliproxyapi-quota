@@ -1,13 +1,12 @@
 /**
  * pi-cliproxy-quota
  *
- * Two commands for a CLIProxyAPI (EasyCLIProxyAPI) setup:
+ * View subscription quota for every OAuth provider CLIProxyAPI holds inside pi:
  *  - /quota: show subscription quota for every OAuth provider the proxy holds,
  *    fetched exactly like the EasyCLIProxyAPI panel does via the proxy management
  *    API `POST /v0/management/api-call`. Providers: claude + antigravity/gemini
  *    (verified), codex + kimi + xai (best-effort, marked (unverified)).
- *  - /think [level]: show or set the thinking level for the current model, and
- *    keep a footer indicator of the active level (native Shift+Tab also works).
+ *  - Footer quota display: automatically refreshed at turn start/end.
  *
  * No secrets in source. Management key is read at runtime from env,
  * ~/.pi/agent/cliproxyapi-quota.json, or the GUI config.toml. See AGENTS.md.
@@ -17,7 +16,6 @@ import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import type { ThinkingLevel, ModelThinkingLevel } from "@earendil-works/pi-ai";
 
 // ---------- config resolution ----------
 
@@ -518,66 +516,11 @@ function isPrimaryUiSession(ctx: ExtensionContext): boolean {
 	return ctx.hasUI && ctx.mode === "tui";
 }
 
-const THINK_ORDER: ModelThinkingLevel[] = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
-
-function supportedLevels(ctx: ExtensionContext): ModelThinkingLevel[] {
-	const map = ctx.model?.thinkingLevelMap;
-	if (!map) return [];
-	return THINK_ORDER.filter((lvl) => lvl === "off" || (map[lvl] != null));
-}
-
 export default function (pi: ExtensionAPI): void {
-	// ----- footer: current thinking level -----
-	const THINK_KEY = "cliproxy-think";
-	function refreshThinkStatus(ctx: ExtensionContext): void {
-		if (!isPrimaryUiSession(ctx)) return;
-		const level = pi.getThinkingLevel();
-		ctx.ui.setStatus(THINK_KEY, ctx.ui.theme.fg("dim", `🧠 ${level}`));
-	}
-	pi.on("thinking_level_select", (_e, ctx) => refreshThinkStatus(ctx));
 	// Switching models switches the footer to that provider's quota immediately.
 	pi.on("model_select", (_e, ctx) => {
-		refreshThinkStatus(ctx);
 		lastFooterFetch = 0;
 		refreshFooterThrottled(ctx);
-	});
-	pi.on("before_agent_start", (_e, ctx) => refreshThinkStatus(ctx));
-
-	// ----- /think -----
-	pi.registerCommand("think", {
-		description: "Show or set the thinking level (off/minimal/low/medium/high/xhigh/max) for the current model",
-		getArgumentCompletions: (prefix: string) => {
-			const items = THINK_ORDER.map((l) => ({ value: l, label: l }));
-			const f = items.filter((i) => i.value.startsWith(prefix.trim().toLowerCase()));
-			return f.length ? f : null;
-		},
-		handler: async (args, ctx) => {
-			const arg = args.trim().toLowerCase();
-			const supported = supportedLevels(ctx);
-			if (!arg) {
-				const cur = pi.getThinkingLevel();
-				const list = supported.length ? supported.join(" / ") : "(this model has no thinking levels)";
-				ctx.ui.notify(
-					`Thinking level: ${cur}\nSupported by this model: ${list}\nUsage: /think high   (or press Shift+Tab to cycle)`,
-					"info",
-				);
-				return;
-			}
-			if (!THINK_ORDER.includes(arg as ModelThinkingLevel)) {
-				ctx.ui.notify(`Unknown level "${arg}". Options: ${THINK_ORDER.join(" / ")}`, "error");
-				return;
-			}
-			if (arg !== "off" && supported.length && !supported.includes(arg as ModelThinkingLevel)) {
-				ctx.ui.notify(
-					`This model doesn't support "${arg}". Options: ${supported.join(" / ")}`,
-					"warning",
-				);
-				return;
-			}
-			pi.setThinkingLevel(arg === "off" ? ("off" as ThinkingLevel) : (arg as ThinkingLevel));
-			refreshThinkStatus(ctx);
-			ctx.ui.notify(`Thinking level set to: ${pi.getThinkingLevel()}`, "info");
-		},
 	});
 
 	// ----- /quota -----

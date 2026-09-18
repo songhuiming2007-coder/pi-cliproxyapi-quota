@@ -1,14 +1,11 @@
 # pi-cliproxyapi-quota
 
-A pi extension that solves two things for setups routing a Claude subscription into pi through
-CLIProxyAPI / EasyCLIProxyAPI:
+A pi extension that allows setups routing subscriptions into pi through CLIProxyAPI / EasyCLIProxyAPI to:
 
-1. `/quota`: view the Claude subscription **5-hour** and **weekly** quota (and other windows) from
+1. `/quota`: view subscription **5-hour** and **weekly** quota (and other windows) from
    inside pi. Same data path as the EasyCLIProxyAPI panel: call the proxy management API
-   `POST /v0/management/api-call`, which proxies a `GET https://api.anthropic.com/api/oauth/usage`
-   using the stored Claude OAuth credential.
-2. `/think [level]`: show/set the current model's thinking level (native `Shift+Tab` also cycles it),
-   plus a persistent footer indicator of the active level.
+   `POST /v0/management/api-call`, which proxies usage endpoints (e.g. Anthropic `/api/oauth/usage`,
+   Google `retrieveUserQuotaSummary`) using the stored OAuth credential.
 
 ## Layout conventions
 
@@ -39,7 +36,7 @@ Add this directory's `index.ts` absolute path to the `extensions` array in
 
 - `node test-quota.mjs` hits the live proxy and prints the rendered quota (also unit-checks the pure
   formatters). Or just `curl` the management API directly.
-- Inside pi: `/quota` shows quota output and `/think high` changes the level — that's a pass.
+- Inside pi: `/quota` shows quota output — that's a pass.
 
 ## Scope
 

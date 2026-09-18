@@ -8,10 +8,9 @@
 A [pi](https://pi.dev) extension for users who route their AI subscriptions into pi through
 [CLIProxyAPI / EasyCLIProxyAPI](https://github.com/router-for-me/EasyCLIProxyAPI).
 
-It adds two things pi doesn't surface for reverse‑proxied models:
+It surfaces subscription limits for reverse-proxied models inside pi:
 
-1. **Quota** — see subscription limits for **every OAuth provider** the proxy holds without leaving pi.
-2. **Thinking level** — a `/think` command and a footer indicator for the active reasoning effort.
+- **Quota** — see subscription limits for **every OAuth provider** the proxy holds without leaving pi.
 
 Supported providers: **Claude**, **Antigravity / Gemini Code Assist**, and **Kimi** (verified), plus
 **Codex** and **xAI / Grok** (best‑effort, shown as `(unverified)` until confirmed against a real
@@ -24,8 +23,6 @@ account — see [Scope](#scope--limitations)).
 | `/quota` | For each credential the proxy holds, show every quota window: used %, remaining %, reset countdown. |
 | `Ctrl+Shift+Q` | Same as `/quota`, but works **while the model is streaming** (it's a shortcut, not a queued command). |
 | footer `Quota[claude] 5h 64% left · 7d 95% left` | Remaining % for the provider of the **current model** (follows model switches; falls back to the first credential). Auto‑refreshed at the start/end of each turn (throttled to 60s). |
-| `/think [level]` | Show or set thinking level (`off/minimal/low/medium/high/xhigh/max`), clamped to the model. |
-| footer `🧠 high` | Always‑visible current thinking level (native `Shift+Tab` also cycles it). |
 
 The quota data path mirrors the EasyCLIProxyAPI control panel exactly: the proxy management API
 `POST /v0/management/api-call` proxies each provider's own usage endpoint (e.g. Anthropic
@@ -83,10 +80,9 @@ MIT
 ## 中文说明
 
 适用于通过 [CLIProxyAPI / EasyCLIProxyAPI](https://github.com/router-for-me/EasyCLIProxyAPI)
-把各 AI 订阅接入 [pi](https://pi.dev) 的用户。它补上了 pi 对反向代理模型不暴露的两件事：
+把各 AI 订阅接入 [pi](https://pi.dev) 的用户。它补上了 pi 对反向代理模型不暴露的订阅配额：
 
-1. **额度** — 在 pi 里直接看代理持有的**每个 OAuth 提供方**的订阅限额。
-2. **思考强度** — `/think` 命令 + footer 常驻显示当前推理档位。
+- **额度** — 在 pi 里直接看代理持有的**每个 OAuth 提供方**的订阅限额。
 
 支持的提供方：**Claude**、**Antigravity / Gemini Code Assist**、**Kimi**（已验证），以及 **Codex**、
 **xAI / Grok**（尽力支持，在真实账号上校准前显示为 `(unverified)`）。
@@ -98,8 +94,6 @@ MIT
 | `/quota` | 对代理持有的每个凭证，显示其所有配额窗口：已用 %、剩余 %、重置倒计时。 |
 | `Ctrl+Shift+Q` | 同 `/quota`，但**模型正在输出时也能按**（快捷键，不会被排队）。 |
 | footer `Quota[claude] 5h 64% left · 7d 95% left` | 显示**当前模型**对应服务的剩余 %（随模型切换，取不到时回退到第一个凭证）；每轮开始/结束自动刷新（60s 节流）。 |
-| `/think [level]` | 查看/设置思考强度（`off/minimal/low/medium/high/xhigh/max`，受模型能力限制）。 |
-| footer `🧠 high` | 常驻显示当前思考强度（原生 `Shift+Tab` 也能循环切换）。 |
 
 取数链路与 EasyCLIProxyAPI 控制面板完全一致：代理管理 API `POST /v0/management/api-call`
 用存储的 OAuth 凭证代理请求各提供方自己的用量端点（如 Anthropic `/api/oauth/usage`、
