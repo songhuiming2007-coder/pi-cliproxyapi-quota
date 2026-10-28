@@ -137,6 +137,8 @@ function providerKey(f: AuthFile): string {
 
 // Normalized quota window (remaining-oriented; used = 100 - remaining).
 export interface Win {
+	/** Antigravity shared pool; absent on other providers/unknown groups. */
+	quotaGroup?: "gemini" | "claude-gpt";
 	label: string;
 	remainingPct: number | null;
 	resetIso: string | null;
@@ -220,7 +222,7 @@ const ANTIGRAVITY_HOSTS = [
 ];
 const ANTIGRAVITY_UA = "antigravity/cli/1.0.13 (aidev_client; os_type=darwin; arch=arm64)";
 
-function parseQuotaSummary(body: string): Win[] {
+export function parseQuotaSummary(body: string): Win[] {
 	const data = JSON.parse(body) as {
 		groups?: Array<{ displayName?: unknown; buckets?: Array<Record<string, unknown>> }>;
 	};
@@ -232,7 +234,13 @@ function parseQuotaSummary(body: string): Win[] {
 			if (frac === null) continue;
 			const win = String(b.window ?? "").toLowerCase();
 			const tag = win === "5h" ? "5h" : win === "weekly" ? "weekly" : win || "quota";
+			const bucketId = String(b.bucketId ?? "");
+			const quotaGroup = bucketId.startsWith("gemini-") ? "gemini"
+				: bucketId.startsWith("3p-") ? "claude-gpt"
+				: gname === "Gemini Models" ? "gemini"
+				: gname === "Claude and GPT models" ? "claude-gpt" : undefined;
 			wins.push({
+				quotaGroup,
 				label: `${gname} · ${tag}`,
 				remainingPct: Math.max(0, Math.min(100, frac * 100)),
 				resetIso: firstIso(b.resetTime),
@@ -522,10 +530,13 @@ const ADAPTERS: Record<string, Adapter> = {
 
 /** Guess which quota provider the current pi model routes to (by provider/id text). */
 export function providerFromModel(model: { provider?: string; id?: string } | undefined): string | null {
-	const s = `${model?.provider ?? ""} ${model?.id ?? ""}`.toLowerCase();
+	const provider = (model?.provider ?? "").toLowerCase();
+	const s = `${provider} ${model?.id ?? ""}`.toLowerCase();
 	// Provider prefix wins over model-family keywords: "devin/claude-sonnet-4-6"
 	// routes to devin quota, not claude. Check devin/swe before claude/gemini.
 	if (s.includes("devin") || s.includes("swe-") || s.includes("swe_")) return "devin";
+	// The explicit route wins over the underlying model family (Claude/GPT-OSS).
+	if (provider.includes("antigravity")) return "antigravity";
 	if (s.includes("claude")) return "claude";
 	if (s.includes("gemini") || s.includes("antigravity")) return "antigravity";
 	if (s.includes("codex") || s.includes("gpt")) return "codex";
@@ -534,12 +545,23 @@ export function providerFromModel(model: { provider?: string; id?: string } | un
 	return null;
 }
 
+/** Select only the current model's Antigravity pool, leaving /quota details intact. */
+export function windowsForModel(wins: Win[], model: { id?: string }): Win[] {
+	const id = (model.id ?? "").toLowerCase();
+	const group = id.startsWith("gemini-") ? "gemini"
+		: /^(claude-|gpt-oss-)/.test(id) ? "claude-gpt" : null;
+	if (!group) return [];
+	return wins.filter(w => w.quotaGroup === group).sort((a, b) =>
+		Number(shortTag(a.label) !== "5h") - Number(shortTag(b.label) !== "5h"));
+}
+
 /** Fetch and render quota for every known credential. Exported for test-quota.mjs. */
 export async function collectQuota(
 	base: string,
 	key: string,
 	now = Date.now(),
 	prefer?: string | null,
+	model?: { provider?: string; id?: string },
 ): Promise<{ blocks: string[]; footer: string }> {
 	const creds = await listCredentials(base, key);
 	const known = creds
@@ -548,6 +570,8 @@ export async function collectQuota(
 	if (known.length === 0) throw new Error("NO_CRED");
 	const blocks: string[] = [];
 	const summaries = new Map<string, string>(); // providerKey -> one-line summary
+	const activeAntigravity = prefer === "antigravity" && model !== undefined;
+	const antigravityAccounts = known.filter(c => providerKey(c) === "antigravity");
 	for (const c of known) {
 		const pk = providerKey(c);
 		const adapter = ADAPTERS[pk];
@@ -557,16 +581,23 @@ export async function collectQuota(
 			const wins = await adapter.fetch(base, key, c);
 			blocks.push(`● ${who} [${pk}]${tag}`);
 			blocks.push(...renderWindows(wins, now));
-			const s = summaryFromWins(wins);
-			if (s !== "Quota n/a" && !summaries.has(pk)) summaries.set(pk, s);
+			const footerWins = activeAntigravity && pk === "antigravity"
+				? windowsForModel(wins, model) : wins;
+			const s = summaryFromWins(footerWins, now);
+			// We cannot infer which credential a load balancer will use.
+			const ambiguous = activeAntigravity && pk === "antigravity" && antigravityAccounts.length !== 1;
+			if (!ambiguous && s !== "Quota n/a" && !summaries.has(pk)) summaries.set(pk, s);
 		} catch (err) {
 			blocks.push(`● ${who} [${pk}]${tag}\n  failed: ${(err as Error).message}`);
 		}
 	}
-	// Footer follows the current model's provider; fall back to the first available.
+	// Explicit Antigravity models must not fall back to an unrelated provider.
+	// Preserve the existing fallback for other providers and legacy callers.
 	// Tag the provider whenever it is not the current model's (or when several exist),
 	// so a fallback never masquerades as the active provider's quota.
-	const actual = prefer && summaries.has(prefer) ? prefer : [...summaries.keys()][0];
+	const actual = activeAntigravity
+		? (summaries.has("antigravity") ? "antigravity" : undefined)
+		: prefer && summaries.has(prefer) ? prefer : [...summaries.keys()][0];
 	const hit = actual !== undefined ? summaries.get(actual) : undefined;
 	// Stamp the fetch time so a stale/frozen footer is visibly distinguishable
 	// from live data that simply hasn't moved.
@@ -661,6 +692,8 @@ function isPrimaryUiSession(ctx: ExtensionContext): boolean {
 export default function (pi: ExtensionAPI): void {
 	// Switching models switches the footer to that provider's quota immediately.
 	pi.on("model_select", (_e, ctx) => {
+		modelRevision++;
+		if (isPrimaryUiSession(ctx)) ctx.ui.setStatus(QUOTA_KEY, undefined);
 		lastFooterFetch = 0;
 		refreshFooterThrottled(ctx);
 	});
@@ -668,24 +701,28 @@ export default function (pi: ExtensionAPI): void {
 	// ----- /quota -----
 	const QUOTA_KEY = "cliproxy-quota";
 	let lastFooterFetch = 0;
+	let modelRevision = 0;
 
-	async function collectUsage(now: number, prefer?: string | null): Promise<{ blocks: string[]; footer: string }> {
+	async function collectUsage(now: number, prefer?: string | null, model?: { provider?: string; id?: string }): Promise<{ blocks: string[]; footer: string }> {
 		const base = resolveBaseUrl();
 		const key = resolveManagementKey();
 		if (!key) throw new Error("NO_KEY");
-		return collectQuota(base, key, now, prefer);
+		return collectQuota(base, key, now, prefer, model);
 	}
 
 	// silent=true only refreshes the footer (used for auto-refresh during/after a turn).
 	async function runQuota(ctx: ExtensionContext, silent = false): Promise<void> {
+		const revision = modelRevision;
+		const model = ctx.model ? { provider: ctx.model.provider, id: ctx.model.id } : undefined;
 		if (!silent) ctx.ui.notify("Fetching quota…", "info");
 		try {
-			const { blocks, footer } = await collectUsage(Date.now(), providerFromModel(ctx.model));
+			const { blocks, footer } = await collectUsage(Date.now(), providerFromModel(model), model);
 			if (!silent) ctx.ui.notify(`Subscription quota\n${blocks.join("\n")}`, "info");
-			if (footer && isPrimaryUiSession(ctx)) {
-				ctx.ui.setStatus(QUOTA_KEY, ctx.ui.theme.fg("dim", footer));
+			if (revision === modelRevision && isPrimaryUiSession(ctx)) {
+				ctx.ui.setStatus(QUOTA_KEY, footer ? ctx.ui.theme.fg("dim", footer) : undefined);
 			}
 		} catch (err) {
+			if (revision === modelRevision && isPrimaryUiSession(ctx)) ctx.ui.setStatus(QUOTA_KEY, undefined);
 			if (silent) return;
 			const msg = (err as Error).message;
 			if (msg === "NO_KEY") {

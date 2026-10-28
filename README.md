@@ -33,6 +33,15 @@ api-call proxy can't carry, so the extension reads the session token from the cr
 and calls upstream directly. These endpoints report utilization; they do not consume quota.
 Disabled credentials are skipped.
 
+For an explicit Antigravity route (for example, provider `cliproxy-antigravity`),
+the footer uses the current model's shared pool: Gemini models use the Gemini pool;
+Claude and GPT-OSS use the Claude/GPT pool. The full `/quota` view still includes
+all groups. If the matching pool is missing, the model alias is unknown, or more
+than one enabled Antigravity credential exists, no Antigravity footer is shown:
+the extension cannot infer which account the proxy will use. It never substitutes
+another provider's quota for this route. Switching models clears the previous
+footer immediately; late responses cannot overwrite the newly selected model.
+
 ## Install
 
 ```bash
@@ -106,6 +115,8 @@ Google `retrieveUserQuotaSummary`/`loadCodeAssist`）。**Devin 例外**：它�
 透传带不了，扩展改为从凭证文件读 session_token 直连上游。这些端点只报告用量，不消耗额度；
 禁用的凭证会跳过。
 
+对于明确标识 Antigravity 的通道（例如 provider 为 `cliproxy-antigravity`），底栏只显示当前模型对应的共享池：Gemini 使用 Gemini 池，Claude 与 GPT-OSS 使用 Claude/GPT 池。`/quota` 的完整视图仍保留全部分组。如果对应池缺失、模型别名无法识别，或存在多个已启用的 Antigravity 凭证，则不显示该通道的底栏额度，因为扩展无法确定代理会选择哪个账号；不会拿其他供应商的额度替代。切换模型时立即清除旧底栏，迟到的响应不会覆盖新模型的显示。
+
 ### 安装
 
 ```bash
@@ -148,3 +159,15 @@ pi install git:github.com/songhuiming2007-coder/pi-cliproxyapi-quota
 ### 许可证
 
 MIT
+
+## Offline regression tests / 离线回归测试
+
+```sh
+npm test
+```
+
+Uses synthetic credentials and mocked HTTP responses; no local credentials or
+live accounts are read. Covers route precedence, pool selection, missing/ambiguous
+quota, compatibility with existing callers, and model-switch response races.
+
+仅使用合成凭证与模拟 HTTP 响应，不读取本机凭证或真实账号。覆盖通道优先级、额度池选择、缺失或多账号情况、既有调用兼容性及模型切换时的响应竞争。
