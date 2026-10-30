@@ -22,7 +22,7 @@ account — see [Scope](#scope--limitations)).
 |---|---|
 | `/quota` | For each credential the proxy holds, show every quota window: used %, remaining %, reset countdown. |
 | `Ctrl+Shift+Q` | Same as `/quota`, but works **while the model is streaming** (it's a shortcut, not a queued command). |
-| footer `Quota[claude] 5h 64% left · 7d 95% left` | Remaining % for the provider of the **current model** (follows model switches; falls back to the first credential). Auto‑refreshed at the start/end of each turn (throttled to 60s). |
+| footer `Quota[claude] 5h 64% left · 7d 95% left` | Remaining % for the **CPA credential that actually serves the current model** (`GET /auth-files/models`). Follows `/model` switches. If that credential has no quota, shows `n/a` instead of another subscription. Auto‑refreshed at turn start/end (throttled to 60s). |
 
 The quota data path mirrors the EasyCLIProxyAPI control panel exactly: the proxy management API
 `POST /v0/management/api-call` proxies each provider's own usage endpoint (e.g. Anthropic
@@ -98,7 +98,7 @@ MIT
 |---|---|
 | `/quota` | 对代理持有的每个凭证，显示其所有配额窗口：已用 %、剩余 %、重置倒计时。 |
 | `Ctrl+Shift+Q` | 同 `/quota`，但**模型正在输出时也能按**（快捷键，不会被排队）。 |
-| footer `Quota[claude] 5h 64% left · 7d 95% left` | 显示**当前模型**对应服务的剩余 %（随模型切换，取不到时回退到第一个凭证）；每轮开始/结束自动刷新（60s 节流）。 |
+| footer `Quota[claude] 5h 64% left · 7d 95% left` | 显示 **CPA 里实际承接当前模型的那张凭证** 的剩余 %（`GET /auth-files/models`，随 `/model` 切换）。读不到写 `n/a`，不拿另一家订阅顶上。每轮开始/结束自动刷新（60s 节流）。 |
 
 取数链路与 EasyCLIProxyAPI 控制面板完全一致：代理管理 API `POST /v0/management/api-call`
 用存储的 OAuth 凭证代理请求各提供方自己的用量端点（如 Anthropic `/api/oauth/usage`、

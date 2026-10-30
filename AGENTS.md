@@ -50,6 +50,8 @@ Add this directory's `index.ts` absolute path to the `extensions` array in
 - xAI quota is `GET https://cli-chat-proxy.grok.com/v1/billing?format=credits` (weekly SuperGrok pool).
   `GET api.x.ai/v1/me` is account health only — do not treat it as usage. Footer must not fall back
   to another provider when the current model's quota is missing.
+- Footer provider is CPA `GET /auth-files/models?name=` (model id → credential), not keyword matching
+  on the model name. `claude-sonnet-4-6` on this account is antigravity, not claude.
 - The management `api-call` request body uses fields `{ authIndex, method, url, header, body }` where
   `body` is a **string** (sending `data` or an object body returns `invalid body`).
 

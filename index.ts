@@ -570,32 +570,55 @@ const ADAPTERS: Record<string, Adapter> = {
 	devin: devinAdapter,
 };
 
-/** Guess which quota provider the current pi model routes to (by provider/id text). */
-export function providerFromModel(model: { provider?: string; id?: string } | undefined): string | null {
-	const s = `${model?.provider ?? ""} ${model?.id ?? ""}`.toLowerCase();
-	// Provider prefix wins over model-family keywords: "devin/claude-sonnet-4-6"
-	// routes to devin quota, not claude. Check devin/swe before claude/gemini.
-	if (s.includes("devin") || s.includes("swe-") || s.includes("swe_")) return "devin";
-	if (s.includes("claude")) return "claude";
-	if (s.includes("gemini") || s.includes("antigravity")) return "antigravity";
-	if (s.includes("codex") || s.includes("gpt")) return "codex";
-	if (s.includes("kimi")) return "kimi";
-	if (s.includes("grok") || s.includes("xai")) return "xai";
-	return null;
+/** CPA catalog: model id → credential provider. No name guessing. */
+export function providerForModelId(modelId: string, catalog: Map<string, string>): string | null {
+	const id = modelId.trim();
+	if (!id) return null;
+	const hit = catalog.get(id) ?? catalog.get(id.toLowerCase());
+	return hit ?? null;
 }
 
-/** Fetch and render quota for every known credential. Exported for test-quota.mjs. */
+async function modelCatalog(base: string, key: string, creds: AuthFile[]): Promise<Map<string, string>> {
+	const catalog = new Map<string, string>();
+	await Promise.all(
+		creds.map(async (c) => {
+			const pk = providerKey(c);
+			const name = c.name || c.id;
+			if (!ADAPTERS[pk] || !name) return;
+			try {
+				const data = await mgmtGet<{ models?: Array<{ id?: unknown }> }>(
+					base, key, `auth-files/models?name=${encodeURIComponent(name)}`,
+				);
+				for (const m of data.models ?? []) {
+					const id = typeof m.id === "string" ? m.id.trim() : "";
+					if (!id || catalog.has(id)) continue;
+					catalog.set(id, pk);
+					if (id !== id.toLowerCase()) catalog.set(id.toLowerCase(), pk);
+				}
+			} catch {
+				// catalog miss → that model stays unmapped; footer shows n/a, never another sub
+			}
+		}),
+	);
+	return catalog;
+}
+
+/** Fetch and render quota for every known credential. Exported for test-quota.mjs.
+ *  `modelId` is the pi/CPA model id (e.g. claude-sonnet-4-6). Footer follows CPA's
+ *  per-credential model list, not the model's marketing name. */
 export async function collectQuota(
 	base: string,
 	key: string,
 	now = Date.now(),
-	prefer?: string | null,
+	modelId?: string | null,
 ): Promise<{ blocks: string[]; footer: string }> {
 	const creds = await listCredentials(base, key);
 	const known = creds
 		.filter((c) => ADAPTERS[providerKey(c)])
 		.sort((a, b) => (providerKey(a) === "claude" ? 0 : 1) - (providerKey(b) === "claude" ? 0 : 1));
 	if (known.length === 0) throw new Error("NO_CRED");
+	const catalog = await modelCatalog(base, key, known);
+	const prefer = modelId ? providerForModelId(modelId, catalog) : null;
 	const blocks: string[] = [];
 	const summaries = new Map<string, string>(); // providerKey -> one-line summary
 	for (const c of known) {
@@ -613,6 +636,9 @@ export async function collectQuota(
 			blocks.push(`● ${who} [${pk}]${tag}\n  failed: ${(err as Error).message}`);
 		}
 	}
+	const d = new Date(now);
+	const stamp = `@${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+	if (modelId && !prefer) return { blocks, footer: `Quota n/a ${stamp}` };
 	return { blocks, footer: footerLine(summaries, prefer, now) };
 }
 
@@ -715,28 +741,28 @@ function isPrimaryUiSession(ctx: ExtensionContext): boolean {
 }
 
 export default function (pi: ExtensionAPI): void {
-	// Switching models switches the footer to that provider's quota immediately.
-	pi.on("model_select", (_e, ctx) => {
+	// Switching models re-reads CPA's per-credential model list and swaps the footer.
+	pi.on("model_select", (e, ctx) => {
 		lastFooterFetch = 0;
-		refreshFooterThrottled(ctx);
+		refreshFooterThrottled(ctx, e.model?.id ?? ctx.model?.id);
 	});
 
 	// ----- /quota -----
 	const QUOTA_KEY = "cliproxy-quota";
 	let lastFooterFetch = 0;
 
-	async function collectUsage(now: number, prefer?: string | null): Promise<{ blocks: string[]; footer: string }> {
+	async function collectUsage(now: number, modelId?: string | null): Promise<{ blocks: string[]; footer: string }> {
 		const base = resolveBaseUrl();
 		const key = resolveManagementKey();
 		if (!key) throw new Error("NO_KEY");
-		return collectQuota(base, key, now, prefer);
+		return collectQuota(base, key, now, modelId);
 	}
 
 	// silent=true only refreshes the footer (used for auto-refresh during/after a turn).
-	async function runQuota(ctx: ExtensionContext, silent = false): Promise<void> {
+	async function runQuota(ctx: ExtensionContext, silent = false, modelId?: string | null): Promise<void> {
 		if (!silent) ctx.ui.notify("Fetching quota…", "info");
 		try {
-			const { blocks, footer } = await collectUsage(Date.now(), providerFromModel(ctx.model));
+			const { blocks, footer } = await collectUsage(Date.now(), modelId ?? ctx.model?.id);
 			if (!silent) ctx.ui.notify(`Subscription quota\n${blocks.join("\n")}`, "info");
 			if (footer && isPrimaryUiSession(ctx)) {
 				ctx.ui.setStatus(QUOTA_KEY, ctx.ui.theme.fg("dim", footer));
@@ -761,12 +787,12 @@ export default function (pi: ExtensionAPI): void {
 	}
 
 	// Auto-refresh footer: first turn start + each turn end, throttled to 60s, silent.
-	function refreshFooterThrottled(ctx: ExtensionContext): void {
+	function refreshFooterThrottled(ctx: ExtensionContext, modelId?: string | null): void {
 		if (!isPrimaryUiSession(ctx)) return;
 		const now = Date.now();
 		if (now - lastFooterFetch < 60_000) return;
 		lastFooterFetch = now;
-		void runQuota(ctx, true);
+		void runQuota(ctx, true, modelId ?? ctx.model?.id);
 	}
 	pi.on("before_agent_start", (_e, ctx) => refreshFooterThrottled(ctx));
 	pi.on("agent_settled", (_e, ctx) => refreshFooterThrottled(ctx));

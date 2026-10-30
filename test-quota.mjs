@@ -1,6 +1,6 @@
 // Live smoke test of the quota data path + pure renderers.
 // Run: node test-quota.mjs
-import { resolveBaseUrl, resolveManagementKey, collectQuota, renderWindows, summaryFromWins, formatReset, parseXaiBilling, footerLine, providerFromModel } from "./index.ts";
+import { resolveBaseUrl, resolveManagementKey, collectQuota, renderWindows, summaryFromWins, formatReset, parseXaiBilling, footerLine, providerForModelId } from "./index.ts";
 
 // formatReset unit checks
 const now = Date.parse("2026-08-19T09:00:00Z");
@@ -28,10 +28,18 @@ const nearFull = [
 ];
 console.assert(summaryFromWins(nearFull, now) === "Quota 5h 100% left", "footer near-full quota");
 
-// grok-4.6 via cliproxyapi must map to xai, not fall through to antigravity keywords
-console.assert(providerFromModel({ provider: "cliproxyapi", id: "grok-4.6" }) === "xai", "grok-4.6 → xai");
-console.assert(providerFromModel({ provider: "cliproxyapi", id: "gemini-3.8-flash-high" }) === "antigravity", "gemini → antigravity");
-console.assert(providerFromModel({ provider: "cliproxyapi", id: "devin/claude-sonnet-4-6" }) === "devin", "devin/claude → devin");
+// Footer provider comes from CPA's per-credential model list, not the model name.
+const catalog = new Map([
+	["grok-4.6", "xai"],
+	["claude-sonnet-4-6", "antigravity"],
+	["gpt-oss-120b-medium", "antigravity"],
+	["devin/claude-haiku-5-5", "devin"],
+]);
+console.assert(providerForModelId("grok-4.6", catalog) === "xai", "grok-4.6 → xai");
+console.assert(providerForModelId("claude-sonnet-4-6", catalog) === "antigravity", "unprefixed claude → antigravity");
+console.assert(providerForModelId("gpt-oss-120b-medium", catalog) === "antigravity", "gpt-oss → antigravity not codex");
+console.assert(providerForModelId("devin/claude-haiku-5-5", catalog) === "devin", "devin/claude → devin");
+console.assert(providerForModelId("no-such-model", catalog) === null, "unknown model");
 
 // SuperGrok weekly billing: creditUsagePercent is *used* %; skip duplicate GrokBuild row
 const xaiWins = parseXaiBilling(JSON.stringify({
@@ -63,5 +71,18 @@ if (!key) process.exit(1);
 
 const { blocks, footer } = await collectQuota(base, key);
 console.log("\n" + blocks.join("\n"));
-console.log("\nfooter:", footer);
+console.log("\nfooter (no model):", footer);
+const grok = await collectQuota(base, key, Date.now(), "grok-4.6");
+const claude = await collectQuota(base, key, Date.now(), "claude-sonnet-4-6");
+const oss = await collectQuota(base, key, Date.now(), "gpt-oss-120b-medium");
+console.log("footer grok-4.6:", grok.footer);
+console.log("footer claude-sonnet-4-6:", claude.footer);
+console.log("footer gpt-oss-120b-medium:", oss.footer);
+if (!grok.footer.includes("Quota[xai]")) { console.error("FAIL grok not xai"); process.exit(1); }
+if (!claude.footer.includes("Quota[antigravity]") || claude.footer.includes("Quota[claude]")) {
+	console.error("FAIL claude-sonnet not antigravity"); process.exit(1);
+}
+if (!oss.footer.includes("Quota[antigravity]") || oss.footer.includes("Quota[codex]")) {
+	console.error("FAIL gpt-oss not antigravity"); process.exit(1);
+}
 console.log("\nOK");
