@@ -42,11 +42,14 @@ Add this directory's `index.ts` absolute path to the `extensions` array in
 
 - Provider registry in `index.ts` (`ADAPTERS`): one adapter per OAuth provider, each with its own
   endpoint / headers / body and a parser that normalizes to `Win { label, remainingPct, resetIso }`.
-- **Verified** against live accounts: `claude`, `antigravity` / `gemini`, `kimi`.
+- **Verified** against live accounts: `claude`, `antigravity` / `gemini`, `kimi`, `devin`, `xai` / `grok`.
 - **Unverified** (endpoints + parsers ported from the EasyCLIProxyAPI panel, not yet tested on a real
-  account, shown as `(unverified)` in output): `codex`, `xai` / `grok`. To verify one: run its
-  request through `POST /v0/management/api-call` with a real credential, compare the raw JSON to the
-  adapter's field names, adjust, then flip `verified: true`.
+  account, shown as `(unverified)` in output): `codex`. To verify: run its request through
+  `POST /v0/management/api-call` with a real credential, compare the raw JSON to the adapter's field
+  names, adjust, then flip `verified: true`.
+- xAI quota is `GET https://cli-chat-proxy.grok.com/v1/billing?format=credits` (weekly SuperGrok pool).
+  `GET api.x.ai/v1/me` is account health only — do not treat it as usage. Footer must not fall back
+  to another provider when the current model's quota is missing.
 - The management `api-call` request body uses fields `{ authIndex, method, url, header, body }` where
   `body` is a **string** (sending `data` or an object body returns `invalid body`).
 

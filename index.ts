@@ -5,7 +5,7 @@
  *  - /quota: show subscription quota for every OAuth provider the proxy holds,
  *    fetched exactly like the EasyCLIProxyAPI panel does via the proxy management
  *    API `POST /v0/management/api-call`. Providers: claude + antigravity/gemini
- *    (verified), codex + kimi + xai (best-effort, marked (unverified)).
+ *    + kimi + xai/grok + devin (verified), codex (best-effort, marked (unverified)).
  *  - Footer quota display: automatically refreshed at turn start/end.
  *
  * No secrets in source. Management key is read at runtime from env,
@@ -496,17 +496,67 @@ const codexAdapter: Adapter = {
 	},
 };
 
-// ---- xai / grok (UNVERIFIED): GET api.x.ai/v1/me (mostly account health) ----
+// ---- xai / grok (VERIFIED): SuperGrok weekly pool via cli-chat-proxy billing ----
+// Same endpoints as EasyCLIProxyAPI QuotaPage. `GET api.x.ai/v1/me` is account health
+// (user_id/team_id only) — it has no usage percent, so a previous adapter here returned
+// empty windows and the footer fell through to another provider (antigravity).
+const XAI_WEEKLY_URL = "https://cli-chat-proxy.grok.com/v1/billing?format=credits";
+const XAI_MONTHLY_URL = "https://cli-chat-proxy.grok.com/v1/billing";
+const XAI_HEADERS = {
+	Authorization: "Bearer $TOKEN$",
+	"x-xai-token-auth": "xai-grok-cli",
+	"x-grok-client-version": "0.2.91",
+	accept: "*/*",
+	"user-agent": "grok-pager/0.2.91 grok-shell/0.2.91 (macos; aarch64)",
+};
+
+/** Parse cli-chat-proxy billing JSON. creditUsagePercent is *used* %, not remaining. */
+export function parseXaiBilling(body: string): Win[] {
+	const data = JSON.parse(body) as Record<string, unknown>;
+	const cfg = (data.config && typeof data.config === "object" ? data.config : data) as Record<string, unknown>;
+	const used = toNum(cfg.creditUsagePercent ?? cfg.credit_usage_percent);
+	const period = (cfg.currentPeriod ?? cfg.current_period) as Record<string, unknown> | undefined;
+	const ptype = String(period?.type ?? "").toUpperCase();
+	const label = ptype.includes("WEEKLY") ? "weekly" : ptype.includes("MONTHLY") ? "monthly" : "usage";
+	const resetIso = firstIso(period?.end, cfg.billingPeriodEnd, cfg.billing_period_end);
+	const wins: Win[] = [];
+	if (used !== null) {
+		wins.push({ label, remainingPct: Math.max(0, 100 - used), resetIso });
+	}
+	const products = cfg.productUsage ?? cfg.product_usage;
+	if (Array.isArray(products)) {
+		for (const raw of products) {
+			if (!raw || typeof raw !== "object") continue;
+			const item = raw as Record<string, unknown>;
+			const p = toNum(item.usagePercent ?? item.usage_percent);
+			if (p === null) continue;
+			// Same number as the period window — don't double-count GrokBuild vs weekly.
+			if (used !== null && p === used) continue;
+			const name = typeof item.product === "string" && item.product.trim() ? item.product : "product";
+			wins.push({ label: name, remainingPct: Math.max(0, 100 - p), resetIso: null });
+		}
+	}
+	return wins;
+}
+
 const xaiAdapter: Adapter = {
-	verified: false,
+	verified: true,
 	async fetch(base, key, cred) {
 		const authIndex = cred.auth_index as string;
-		const body = await proxyCall(base, key, {
-			authIndex, method: "GET", url: "https://api.x.ai/v1/me", header: { ...BEARER, accept: "application/json" },
-		});
-		const data = JSON.parse(body) as Record<string, unknown>;
-		const p = toNum(data.usagePercent ?? data.usage_percent ?? data.creditUsagePercent);
-		return p === null ? [] : [{ label: "usage", remainingPct: Math.max(0, 100 - p), resetIso: null }];
+		let lastErr: Error | undefined;
+		for (const url of [XAI_WEEKLY_URL, XAI_MONTHLY_URL]) {
+			try {
+				const body = await proxyCall(base, key, {
+					authIndex, method: "GET", url, header: XAI_HEADERS,
+				});
+				const wins = parseXaiBilling(body);
+				if (wins.length) return wins;
+			} catch (e) {
+				lastErr = e as Error;
+			}
+		}
+		if (lastErr) throw lastErr;
+		return [];
 	},
 };
 
@@ -563,22 +613,28 @@ export async function collectQuota(
 			blocks.push(`● ${who} [${pk}]${tag}\n  failed: ${(err as Error).message}`);
 		}
 	}
-	// Footer follows the current model's provider; fall back to the first available.
-	// Tag the provider whenever it is not the current model's (or when several exist),
-	// so a fallback never masquerades as the active provider's quota.
-	const actual = prefer && summaries.has(prefer) ? prefer : [...summaries.keys()][0];
-	const hit = actual !== undefined ? summaries.get(actual) : undefined;
-	// Stamp the fetch time so a stale/frozen footer is visibly distinguishable
-	// from live data that simply hasn't moved.
+	return { blocks, footer: footerLine(summaries, prefer, now) };
+}
+
+/** Footer for the *current* model's provider. Never show another provider's quota as a stand-in. */
+export function footerLine(
+	summaries: Map<string, string>,
+	prefer: string | null | undefined,
+	now: number,
+): string {
 	const d = new Date(now);
 	const stamp = `@${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
-	const footer =
-		hit && actual
-			? (summaries.size > 1 || actual !== prefer
-				? hit.replace("Quota ", `Quota[${actual}] `)
-				: hit) + ` ${stamp}`
-			: "";
-	return { blocks, footer };
+	const actual = prefer
+		? (summaries.has(prefer) ? prefer : null)
+		: [...summaries.keys()][0];
+	if (prefer && !actual) return `Quota[${prefer}] n/a ${stamp}`;
+	const hit = actual ? summaries.get(actual) : undefined;
+	if (!hit || !actual) return "";
+	const tagged =
+		summaries.size > 1 || actual !== prefer
+			? hit.replace("Quota ", `Quota[${actual}] `)
+			: hit;
+	return `${tagged} ${stamp}`;
 }
 
 // ---------- rendering ----------

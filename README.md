@@ -12,8 +12,8 @@ It surfaces subscription limits for reverse-proxied models inside pi:
 
 - **Quota** — see subscription limits for **every OAuth provider** the proxy holds without leaving pi.
 
-Supported providers: **Claude**, **Antigravity / Gemini Code Assist**, **Kimi**, and **Devin**
-(verified), plus **Codex** and **xAI / Grok** (best‑effort, shown as `(unverified)` until confirmed against a real
+Supported providers: **Claude**, **Antigravity / Gemini Code Assist**, **Kimi**, **Devin**, and **xAI / Grok**
+(verified), plus **Codex** (best‑effort, shown as `(unverified)` until confirmed against a real
 account — see [Scope](#scope--limitations)).
 
 ## Features
@@ -68,10 +68,12 @@ If you don’t run the GUI, set `CLIPROXYAPI_MANAGEMENT_KEY` (must match your pr
 
 ## Scope & limitations
 
-- **Verified** (tested against live accounts): `claude`, `antigravity` / `gemini`.
+- **Verified** (tested against live accounts): `claude`, `antigravity` / `gemini`, `kimi`, `devin`, `xai` / `grok`.
 - **Unverified** (ported from the EasyCLIProxyAPI panel, endpoints + parsers wired but not yet tested
-  against a real account): `codex`, `xai` / `grok`. These are labelled `(unverified)` in the
-  output. If one is wrong for your account, please open an issue with the raw response — easy to fix.
+  against a real account): `codex`. Labelled `(unverified)` in the output. If it is wrong for your
+  account, please open an issue with the raw response — easy to fix.
+- Footer follows the **current model**'s provider. If that provider's quota cannot be read, it shows
+  `Quota[xai] n/a` (or the matching name) instead of substituting another subscription.
 - Reads a local management key to call the localhost management API; nothing is sent anywhere except
   your own proxy and each provider's usage endpoint (through that proxy). Disabled credentials are skipped.
 
@@ -88,8 +90,7 @@ MIT
 
 - **额度** — 在 pi 里直接看代理持有的**每个 OAuth 提供方**的订阅限额。
 
-支持的提供方：**Claude**、**Antigravity / Gemini Code Assist**、**Kimi**、**Devin**（已验证），以及 **Codex**、
-**xAI / Grok**（尽力支持，在真实账号上校准前显示为 `(unverified)`）。
+支持的提供方：**Claude**、**Antigravity / Gemini Code Assist**、**Kimi**、**Devin**、**xAI / Grok**（已验证），以及 **Codex**（尽力支持，在真实账号上校准前显示为 `(unverified)`）。
 
 ### 功能
 
@@ -140,9 +141,9 @@ pi install git:github.com/songhuiming2007-coder/pi-cliproxyapi-quota
 
 ### 范围与限制
 
-- **已验证**（在真实账号上实测）：`claude`、`antigravity` / `gemini`。
-- **未验证**（按 EasyCLIProxyAPI 面板移植，端点与解析已接但未在真实账号上跑过）：`codex`、
-  `xai` / `grok`，输出里标 `(unverified)`。若某家在你账号上不对，请带原始返回开 issue，很容易修。
+- **已验证**（在真实账号上实测）：`claude`、`antigravity` / `gemini`、`kimi`、`devin`、`xai` / `grok`。
+- **未验证**（按 EasyCLIProxyAPI 面板移植，端点与解析已接但未在真实账号上跑过）：`codex`，输出里标 `(unverified)`。若在你账号上不对，请带原始返回开 issue，很容易修。
+- Footer 只显示**当前模型**对应订阅。读不到时写 `Quota[xai] n/a`，不会拿另一家（例如 Antigravity）顶上。
 - 仅读取本地管理密钥去调本机管理 API；除了你自己的代理和（经代理的）各提供方用量端点，不向任何地方发送数据；禁用的凭证会跳过。
 
 ### 许可证
